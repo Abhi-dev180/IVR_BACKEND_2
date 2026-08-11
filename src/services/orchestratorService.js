@@ -1,6 +1,7 @@
 const twilio = require('twilio');
 const AttemptModel = require('../models/attemptModel');
 const { broadcast } = require('./websocketService');
+const { pool } = require('../config/db');
 
 // Initialize Twilio client if keys are present
 const accountSid = process.env.TWILIO_ACCOUNT_SID;
@@ -138,7 +139,7 @@ const OrchestratorService = {
       RETURNING *;
     `;
     const logMsg = `[${new Date().toISOString()}] Automatically rescheduled for retry.`;
-    const res = await AttemptModel.pool.query(query, [logMsg, MAX_RETRIES]);
+    const res = await pool.query(query, [logMsg, MAX_RETRIES]);
     
     if (res.rows.length > 0) {
       console.log(`[Orchestrator] Rescheduled ${res.rows.length} failed attempts for retry.`);
