@@ -1,9 +1,9 @@
-const express = require('express');
+import express from 'express';
 const router = express.Router();
-const CampaignController = require('../controllers/campaignController');
-const TwilioWebhookController = require('../controllers/twilioWebhookController');
-const AuthController = require('../controllers/authController');
-const authMiddleware = require('../middleware/authMiddleware');
+import * as CampaignController from '../controllers/campaignController.js';
+import * as TwilioWebhookController from '../controllers/twilioWebhookController.js';
+import * as AuthController from '../controllers/authController.js';
+import authMiddleware from '../middleware/authMiddleware.js';
 
 // Auth routes
 router.post('/auth/login', AuthController.login);
@@ -37,4 +37,4 @@ router.post('/recording-callback/:attemptId', TwilioWebhookController.handleReco
 // Twilio webhook interactive gather callback
 router.post('/verify-gather/:attemptId', TwilioWebhookController.handleGatherCallback);
 
-module.exports = router;
+export default router;

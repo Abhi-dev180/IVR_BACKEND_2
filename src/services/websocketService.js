@@ -1,9 +1,9 @@
-const { WebSocketServer } = require('ws');
+import { WebSocketServer } from 'ws';
 
 let wss = null;
 const clients = new Set();
 
-const initializeWebSocket = (server) => {
+export const initializeWebSocket = (server) => {
   wss = new WebSocketServer({ server });
 
   wss.on('connection', (ws) => {
@@ -24,7 +24,7 @@ const initializeWebSocket = (server) => {
   console.log('[WS] WebSocket Server initialized.');
 };
 
-const broadcast = (type, payload) => {
+export const broadcast = (type, payload) => {
   if (!wss) return;
   const message = JSON.stringify({ type, payload });
   clients.forEach((client) => {
@@ -34,7 +34,4 @@ const broadcast = (type, payload) => {
   });
 };
 
-module.exports = {
-  initializeWebSocket,
-  broadcast
-};
+

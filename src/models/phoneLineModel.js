@@ -1,9 +1,8 @@
-const { supabase } = require('../config/db');
-const { broadcast } = require('../services/websocketService');
+import { supabase } from '../config/db.js';
+import { broadcast } from '../services/websocketService.js';
 
-const PhoneLineModel = {
-  // Add/register a new phone line
-  async addPhoneLine(phoneNumber, maxAttempts = 100) {
+// Add/register a new phone line
+export const addPhoneLine = async (phoneNumber, maxAttempts = 100) => {
     const { data, error } = await supabase
       .from('phone_lines')
       .upsert({ phone_number: phoneNumber, max_attempts: maxAttempts, status: 'idle' }, { onConflict: 'phone_number' })
@@ -17,10 +16,10 @@ const PhoneLineModel = {
     
     broadcast('line_update', data);
     return data;
-  },
+  };
 
   // Get all registered phone lines
-  async getAllPhoneLines() {
+  export const getAllPhoneLines = async () => {
     const { data, error } = await supabase
       .from('phone_lines')
       .select('*')
@@ -31,10 +30,10 @@ const PhoneLineModel = {
       throw error;
     }
     return data || [];
-  },
+  };
 
   // Update phone line status (idle/busy)
-  async updateLineStatus(lineId, status, currentAttemptId = null, additionalUpdates = {}) {
+  export const updateLineStatus = async (lineId, status, currentAttemptId = null, additionalUpdates = {}) => {
     const { data, error } = await supabase
       .from('phone_lines')
       .update({
@@ -54,10 +53,10 @@ const PhoneLineModel = {
 
     broadcast('line_update', data);
     return data;
-  },
+  };
 
   // Delete a phone line
-  async deletePhoneLine(lineId) {
+  export const deletePhoneLine = async (lineId) => {
     const { data, error } = await supabase
       .from('phone_lines')
       .delete()
@@ -73,10 +72,10 @@ const PhoneLineModel = {
     // Broadcast delete event (payload null or containing the deleted id)
     broadcast('line_delete', { id: lineId });
     return data;
-  },
+  };
 
   // Edit/Update a phone line's phone number
-  async updatePhoneLine(lineId, phoneNumber) {
+  export const updatePhoneLine = async (lineId, phoneNumber) => {
     const { data, error } = await supabase
       .from('phone_lines')
       .update({ phone_number: phoneNumber, updated_at: new Date().toISOString() })
@@ -91,7 +90,4 @@ const PhoneLineModel = {
 
     broadcast('line_update', data);
     return data;
-  }
-};
-
-module.exports = PhoneLineModel;
+  };

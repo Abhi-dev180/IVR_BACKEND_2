@@ -1,16 +1,16 @@
-const twilio = require('twilio');
-const AttemptModel = require('../models/attemptModel');
-const PhoneLineModel = require('../models/phoneLineModel');
-const OrchestratorService = require('../services/orchestratorService');
+import twilio from 'twilio';
+import * as AttemptModel from '../models/attemptModel.js';
+import * as PhoneLineModel from '../models/phoneLineModel.js';
+import * as OrchestratorService from '../services/orchestratorService.js';
+import fs from 'fs';
 
 // Initialize Twilio client if keys are present
 const accountSid = process.env.TWILIO_ACCOUNT_SID;
 const authToken = process.env.TWILIO_AUTH_TOKEN;
 const client = accountSid && authToken ? twilio(accountSid, authToken) : null;
 
-const CampaignController = {
-  // Get dashboard status
-  async getDashboardStatus(req, res) {
+// Get dashboard status
+export const getDashboardStatus = async (req, res) => {
     try {
       const lines = await PhoneLineModel.getAllPhoneLines();
       const attempts = await AttemptModel.getAttempts();
@@ -20,10 +20,10 @@ const CampaignController = {
       console.error('Error fetching dashboard status:', error);
       return res.status(500).json({ error: error.message });
     }
-  },
+  };
 
   // Initialize a phone line
-  async addPhoneLine(req, res) {
+  export const addPhoneLine = async (req, res) => {
     const { phoneNumber, maxAttempts } = req.body;
     
     // Security: Validate phone number format (E.164)
@@ -37,10 +37,10 @@ const CampaignController = {
     } catch (error) {
       return res.status(500).json({ error: error.message });
     }
-  },
+  };
 
   // Trigger an outbound call (Milestone 1 Core Flow)
-  async triggerCall(req, res) {
+  export const triggerCall = async (req, res) => {
     const { testValue, phoneNumberId, toPhoneNumber } = req.body;
 
     // Security: Validate digits to prevent injection or invalid requests
@@ -118,13 +118,13 @@ const CampaignController = {
       console.error('Error placing outbound call:', error);
       return res.status(500).json({ error: error.message });
     }
-  },
+  };
 
   // Start campaign from JSON targets
-  async startCampaign(req, res) {
+  export const startCampaign = async (req, res) => {
     const { phoneNumberId } = req.body;
     try {
-      const targets = require('../config/test_targets.json');
+      const targets = JSON.parse(fs.readFileSync(new URL('../config/test_targets.json', import.meta.url)));
       const batchId = `batch-${Date.now()}`;
       
       // Load batch into database
@@ -138,10 +138,10 @@ const CampaignController = {
       console.error('Error starting campaign:', error);
       return res.status(500).json({ error: error.message });
     }
-  },
+  };
 
   // Stop campaign
-  async stopCampaign(req, res) {
+  export const stopCampaign = async (req, res) => {
     try {
       OrchestratorService.stopCampaign();
       return res.status(200).json({ message: 'Campaign stopped successfully.' });
@@ -149,10 +149,10 @@ const CampaignController = {
       console.error('Error stopping campaign:', error);
       return res.status(500).json({ error: error.message });
     }
-  },
+  };
 
   // Delete a phone line
-  async deletePhoneLine(req, res) {
+  export const deletePhoneLine = async (req, res) => {
     const { lineId } = req.params;
     try {
       await PhoneLineModel.deletePhoneLine(parseInt(lineId));
@@ -161,10 +161,10 @@ const CampaignController = {
       console.error('Error deleting phone line:', error);
       return res.status(500).json({ error: error.message });
     }
-  },
+  };
 
   // Edit/Update a phone line's phone number
-  async updatePhoneLine(req, res) {
+  export const updatePhoneLine = async (req, res) => {
     const { lineId } = req.params;
     const { phoneNumber } = req.body;
 
@@ -179,7 +179,4 @@ const CampaignController = {
       console.error('Error updating phone line:', error);
       return res.status(500).json({ error: error.message });
     }
-  }
-};
-
-module.exports = CampaignController;
+  };

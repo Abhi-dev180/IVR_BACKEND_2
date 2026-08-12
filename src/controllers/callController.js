@@ -1,15 +1,17 @@
-const twilio = require('twilio');
-const AttemptModel = require('../models/attemptModel');
-const OrchestratorService = require('../services/orchestratorService');
+import twilio from 'twilio';
+import * as AttemptModel from '../models/attemptModel.js';
+import * as OrchestratorService from '../services/orchestratorService.js';
+import * as transcriptionService from '../services/transcriptionService.js';
+import { supabase } from '../config/db.js';
+import fs from 'fs';
 
 // Initialize Twilio client if keys are present
 const accountSid = process.env.TWILIO_ACCOUNT_SID;
 const authToken = process.env.TWILIO_AUTH_TOKEN;
 const client = accountSid && authToken ? twilio(accountSid, authToken) : null;
 
-const CallController = {
-  // Get dashboard status
-  async getDashboardStatus(req, res) {
+// Get dashboard status
+export const getDashboardStatus = async (req, res) => {
     try {
       const lines = await AttemptModel.getAllPhoneLines();
       const attempts = await AttemptModel.getAttempts();
@@ -19,10 +21,10 @@ const CallController = {
       console.error('Error fetching dashboard status:', error);
       return res.status(500).json({ error: error.message });
     }
-  },
+  };
 
   // Initialize a phone line
-  async addPhoneLine(req, res) {
+  export const addPhoneLine = async (req, res) => {
     const { phoneNumber, maxAttempts } = req.body;
     
     // Security: Validate phone number format (E.164)
@@ -36,10 +38,10 @@ const CallController = {
     } catch (error) {
       return res.status(500).json({ error: error.message });
     }
-  },
+  };
 
   // Trigger an outbound call (Milestone 1 Core Flow)
-  async triggerCall(req, res) {
+  export const triggerCall = async (req, res) => {
     const { testValue, phoneNumberId, toPhoneNumber } = req.body;
 
     // Security: Validate digits to prevent injection or invalid requests
@@ -118,12 +120,12 @@ const CallController = {
       console.error('Error placing outbound call:', error);
       return res.status(500).json({ error: error.message });
     }
-  },
+  };
 
   // Start campaign from JSON targets
-  async startCampaign(req, res) {
+  export const startCampaign = async (req, res) => {
     try {
-      const targets = require('../config/test_targets.json');
+      const targets = JSON.parse(fs.readFileSync(new URL('../config/test_targets.json', import.meta.url)));
       const batchId = `batch-${Date.now()}`;
       
       // Load batch into database
@@ -137,10 +139,10 @@ const CallController = {
       console.error('Error starting campaign:', error);
       return res.status(500).json({ error: error.message });
     }
-  },
+  };
 
   // Stop campaign
-  async stopCampaign(req, res) {
+  export const stopCampaign = async (req, res) => {
     try {
       OrchestratorService.stopCampaign();
       return res.status(200).json({ message: 'Campaign stopped successfully.' });
@@ -148,10 +150,10 @@ const CallController = {
       console.error('Error stopping campaign:', error);
       return res.status(500).json({ error: error.message });
     }
-  },
+  };
 
   // Generate TwiML for when the call is answered (Interactive Verification Bot Flow)
-  async getTwiML(req, res) {
+  export const getTwiML = async (req, res) => {
     const { attemptId } = req.params;
     try {
       const attempt = await AttemptModel.addLog(attemptId, 'Call connected. Initiating interactive gather prompt.');
@@ -190,10 +192,10 @@ const CallController = {
       res.type('text/xml');
       return res.send(twiml.toString());
     }
-  },
+  };
 
   // Webhook for tracking call status updates from Twilio
-  async handleStatusCallback(req, res) {
+  export const handleStatusCallback = async (req, res) => {
     const { attemptId } = req.params;
     const { CallStatus, CallDuration } = req.body;
     try {
@@ -212,10 +214,10 @@ const CallController = {
       console.error('Error handling status callback:', error);
       return res.status(500).send('Error');
     }
-  },
+  };
 
   // Webhook for handling recording callbacks
-  async handleRecordingCallback(req, res) {
+  export const handleRecordingCallback = async (req, res) => {
     const { attemptId } = req.params;
     const { RecordingUrl, RecordingStatus } = req.body;
     try {
@@ -224,7 +226,6 @@ const CallController = {
         await AttemptModel.addLog(attemptId, `Recording URL: ${RecordingUrl}`);
         
         // Start transcription and analysis asynchronously
-        const transcriptionService = require('../services/transcriptionService');
         transcriptionService.processRecording(attemptId, RecordingUrl).catch(err => {
           console.error(`Error transcribing recording for attempt #${attemptId}:`, err);
         });
@@ -234,14 +235,12 @@ const CallController = {
       console.error('Error handling recording callback:', error);
       return res.status(500).send('Error');
     }
-  },
+  };
 
   // Webhook for handling interactive DTMF inputs from gather
-  async handleGatherCallback(req, res) {
+  export const handleGatherCallback = async (req, res) => {
     const { attemptId } = req.params;
     const { Digits } = req.body;
-    const { supabase } = require('../config/db');
-    const transcriptionService = require('../services/transcriptionService');
 
     try {
       await AttemptModel.addLog(attemptId, `User submitted DTMF card digits: ${Digits}`);
@@ -295,7 +294,4 @@ const CallController = {
       res.type('text/xml');
       return res.send(twiml.toString());
     }
-  }
-};
-
-module.exports = CallController;
+  };

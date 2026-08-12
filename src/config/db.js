@@ -1,5 +1,7 @@
-const { createClient } = require('@supabase/supabase-js');
-require('dotenv').config();
+import { createClient } from '@supabase/supabase-js';
+import dotenv from 'dotenv';
+dotenv.config();
+import bcrypt from 'bcryptjs';
 
 const supabaseUrl = process.env.SUPABASE_URL;
 const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
@@ -19,7 +21,7 @@ const supabase = createClient(supabaseUrl || 'https://placeholder.supabase.co', 
 
 const initializeDatabase = async () => {
   console.log('Supabase HTTP client initialized successfully.');
-  
+
   try {
     const { error } = await supabase
       .from('phone_lines')
@@ -62,23 +64,22 @@ const initializeDatabase = async () => {
       const { data: adminCount, error: countErr } = await supabase
         .from('admins')
         .select('*', { count: 'exact', head: true });
-        
+
       if (!countErr && (adminCount === 0 || adminCount === null)) {
         console.log('Seeding default administrator account...');
-        const bcrypt = require('bcryptjs');
         const defaultHash = await bcrypt.hash('admin123', 10);
         const { error: insertError } = await supabase
           .from('admins')
           .insert({
-            email: 'admin@mail.com',
+            email: 'admin@gmail.com',
             password_hash: defaultHash,
             role: 'admin'
           });
-          
+
         if (insertError) {
           console.error('Failed to seed default admin:', insertError.message);
         } else {
-          console.log('Default admin seeded: admin@mail.com / admin123');
+          console.log('Default admin seeded: admin@gmail.com / admin123');
         }
       }
     }
@@ -87,7 +88,4 @@ const initializeDatabase = async () => {
   }
 };
 
-module.exports = {
-  supabase,
-  initializeDatabase
-};
+export { supabase, initializeDatabase };

@@ -1,8 +1,8 @@
-const twilio = require('twilio');
-const AttemptModel = require('../models/attemptModel');
-const PhoneLineModel = require('../models/phoneLineModel');
-const { broadcast } = require('./websocketService');
-const { supabase } = require('../config/db');
+import twilio from 'twilio';
+import * as AttemptModel from '../models/attemptModel.js';
+import * as PhoneLineModel from '../models/phoneLineModel.js';
+import { broadcast } from './websocketService.js';
+import { supabase } from '../config/db.js';
 
 // Initialize Twilio client if keys are present
 const accountSid = process.env.TWILIO_ACCOUNT_SID;
@@ -15,12 +15,11 @@ const MAX_RETRIES = 3;
 
 let campaignLineId = null;
 
-const OrchestratorService = {
-  isRunning() {
+export const isRunning = () => {
     return isCampaignRunning;
-  },
+};
 
-  async startCampaign(phoneNumberId) {
+export const startCampaign = async (phoneNumberId) => {
     if (isCampaignRunning) return;
     isCampaignRunning = true;
     campaignLineId = phoneNumberId ? parseInt(phoneNumberId) : null;
@@ -30,14 +29,14 @@ const OrchestratorService = {
     // Run the orchestrator loop
     workerInterval = setInterval(async () => {
       try {
-        await this.tick();
+        await tick();
       } catch (err) {
         console.error('[Orchestrator] Error in worker tick:', err);
       }
     }, 2000);
-  },
+};
 
-  async stopCampaign() {
+export const stopCampaign = async () => {
     if (!isCampaignRunning) return;
     isCampaignRunning = false;
     campaignLineId = null; // Reset
@@ -49,10 +48,10 @@ const OrchestratorService = {
     console.log('[Orchestrator] Campaign stopped.');
     
     // Hang up all active calls immediately
-    await this.terminateActiveCalls();
-  },
+    await terminateActiveCalls();
+};
 
-  async terminateActiveCalls() {
+export const terminateActiveCalls = async () => {
     console.log('[Orchestrator] Terminating active calls...');
     try {
       const { data: activeAttempts, error } = await supabase
@@ -82,9 +81,9 @@ const OrchestratorService = {
     } catch (err) {
       console.error('[Orchestrator] Error terminating active calls:', err);
     }
-  },
+};
 
-  async tick() {
+export const tick = async () => {
     if (!isCampaignRunning) return;
 
     // 1. Get all phone lines
@@ -101,18 +100,18 @@ const OrchestratorService = {
       const attempt = await AttemptModel.claimNextQueuedAttempt(line.id);
       if (!attempt) {
         // No queued attempts. Check if we have failed attempts that should be retried.
-        await this.checkAndScheduleRetries();
+        await checkAndScheduleRetries();
         break; 
       }
 
       console.log(`[Orchestrator] Assigning Attempt #${attempt.id} to Phone Line ${line.phone_number}`);
       
       // Place the call
-      this.executeCall(attempt, line);
+      executeCall(attempt, line);
     }
-  },
+};
 
-  async executeCall(attempt, line) {
+export const executeCall = async (attempt, line) => {
     const host = process.env.SERVER_URL || 'http://localhost:5000';
 
     if (!client) {
@@ -170,9 +169,9 @@ const OrchestratorService = {
         await AttemptModel.updateAttemptStatus(attempt.id, 'failed', 0, { error: err.message });
       }
     }
-  },
+};
 
-  async checkAndScheduleRetries() {
+export const checkAndScheduleRetries = async () => {
     // Look for attempts in the current run that have failed and have remaining retries
     const { data: failedAttempts, error: fetchErr } = await supabase
       .from('attempts')
@@ -212,7 +211,4 @@ const OrchestratorService = {
       console.log(`[Orchestrator] Rescheduled ${rescheduled.length} failed attempts for retry.`);
       rescheduled.forEach(attempt => broadcast('attempt_update', attempt));
     }
-  }
 };
-
-module.exports = OrchestratorService;

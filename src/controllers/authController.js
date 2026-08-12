@@ -1,12 +1,11 @@
-const bcrypt = require('bcryptjs');
-const jwt = require('jsonwebtoken');
-const { supabase } = require('../config/db');
+import bcrypt from 'bcryptjs';
+import jwt from 'jsonwebtoken';
+import { supabase } from '../config/db.js';
 
 const JWT_SECRET = process.env.JWT_SECRET || 'super_secret_twilio_ivr_key';
 
-const AuthController = {
-  // Admin Login
-  async login(req, res) {
+// Admin Login
+export const login = async (req, res) => {
     const { email, password } = req.body;
 
     // Validate email format
@@ -55,10 +54,10 @@ const AuthController = {
       console.error('Error during admin login:', err);
       return res.status(500).json({ error: 'Internal server error during authentication.' });
     }
-  },
+  };
 
-  // Admin Registration/Add (Optional helper)
-  async register(req, res) {
+// Admin Registration/Add (Optional helper)
+export const register = async (req, res) => {
     const { email, password, role } = req.body;
 
     if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
@@ -111,7 +110,4 @@ const AuthController = {
       console.error('Error creating admin account:', err);
       return res.status(500).json({ error: 'Failed to register admin account.' });
     }
-  }
-};
-
-module.exports = AuthController;
+  };

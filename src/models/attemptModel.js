@@ -1,10 +1,9 @@
-const { supabase } = require('../config/db');
-const { broadcast } = require('../services/websocketService');
-const PhoneLineModel = require('./phoneLineModel');
+import { supabase } from '../config/db.js';
+import { broadcast } from '../services/websocketService.js';
+import * as PhoneLineModel from './phoneLineModel.js';
 
-const AttemptModel = {
-  // Create a new test attempt
-  async createAttempt(testValue) {
+// Create a new test attempt
+export const createAttempt = async (testValue) => {
     const initialLog = `[${new Date().toISOString()}] Attempt created. Status: queued.`;
     const { data, error } = await supabase
       .from('attempts')
@@ -19,10 +18,10 @@ const AttemptModel = {
     
     broadcast('attempt_update', data);
     return data;
-  },
+  };
 
   // Get attempts (with left-joined phone line numbers)
-  async getAttempts() {
+  export const getAttempts = async () => {
     const { data, error } = await supabase
       .from('attempts')
       .select('*, phone_lines(phone_number)')
@@ -38,10 +37,10 @@ const AttemptModel = {
       ...item,
       phone_number: item.phone_lines ? item.phone_lines.phone_number : null
     }));
-  },
+  };
 
   // Assign attempt to a line
-  async assignAttemptToLine(attemptId, lineId) {
+  export const assignAttemptToLine = async (attemptId, lineId) => {
     // Set phone line status to busy
     await PhoneLineModel.updateLineStatus(lineId, 'busy', attemptId);
 
@@ -73,10 +72,10 @@ const AttemptModel = {
     broadcast('attempt_update', updatedAttempt);
 
     return updatedAttempt;
-  },
+  };
 
   // Update Call SID for an attempt
-  async updateCallSid(attemptId, callSid) {
+  export const updateCallSid = async (attemptId, callSid) => {
     const { data: attempt, error: fetchErr } = await supabase
       .from('attempts')
       .select('logs')
@@ -101,10 +100,10 @@ const AttemptModel = {
     if (attemptErr) throw attemptErr;
     broadcast('attempt_update', updatedAttempt);
     return updatedAttempt;
-  },
+  };
 
   // Find attempt by Call SID
-  async findAttemptByCallSid(callSid) {
+  export const findAttemptByCallSid = async (callSid) => {
     const { data, error } = await supabase
       .from('attempts')
       .select('*')
@@ -113,10 +112,10 @@ const AttemptModel = {
     
     if (error) throw error;
     return data;
-  },
+  };
 
   // Add a log message to an attempt
-  async addLog(attemptId, logMessage) {
+  export const addLog = async (attemptId, logMessage) => {
     const formattedLog = `[${new Date().toISOString()}] ${logMessage}`;
 
     const { data: attempt, error: fetchErr } = await supabase
@@ -141,10 +140,10 @@ const AttemptModel = {
     if (attemptErr) throw attemptErr;
     broadcast('attempt_update', updatedAttempt);
     return updatedAttempt;
-  },
+  };
 
   // Create a batch of attempts from JSON targets
-  async createAttemptBatch(targets, batchId) {
+  export const createAttemptBatch = async (targets, batchId) => {
     const inserted = [];
     
     for (const t of targets) {
@@ -167,10 +166,10 @@ const AttemptModel = {
     
     inserted.forEach(attempt => broadcast('attempt_update', attempt));
     return inserted;
-  },
+  };
 
   // Claim next queued or retry attempt
-  async claimNextQueuedAttempt(lineId) {
+  export const claimNextQueuedAttempt = async (lineId) => {
     // 1. First look for new uncalled queued attempts
     let { data: attempt, error: fetchErr } = await supabase
       .from('attempts')
@@ -198,11 +197,11 @@ const AttemptModel = {
 
     if (!attempt) return null;
     // Assign to line
-    return await this.assignAttemptToLine(attempt.id, lineId);
-  },
+    return await assignAttemptToLine(attempt.id, lineId);
+  };
 
   // Update attempt status and duration
-  async updateAttemptStatus(attemptId, status, duration = 0, resultDetails = {}) {
+  export const updateAttemptStatus = async (attemptId, status, duration = 0, resultDetails = {}) => {
     const { data: attempt, error: fetchErr } = await supabase
       .from('attempts')
       .select('*')
@@ -245,7 +244,4 @@ const AttemptModel = {
 
     broadcast('attempt_update', updatedAttempt);
     return updatedAttempt;
-  }
-};
-
-module.exports = AttemptModel;
+  };

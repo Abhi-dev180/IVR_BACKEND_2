@@ -136,19 +136,19 @@ Object.keys(PHRASES).forEach(key => {
 });
 
 // Stage Constants
-const STAGE_LANGUAGE = "LANGUAGE";
-const STAGE_CARD = "CARD";
-const STAGE_ACTIVATE = "ACTIVATE";
-const STAGE_CODE = "CODE";
-const STAGE_EXPIRY = "EXPIRY";
-const STAGE_VOICEMAIL = "VOICEMAIL";
+export const STAGE_LANGUAGE = "LANGUAGE";
+export const STAGE_CARD = "CARD";
+export const STAGE_ACTIVATE = "ACTIVATE";
+export const STAGE_CODE = "CODE";
+export const STAGE_EXPIRY = "EXPIRY";
+export const STAGE_VOICEMAIL = "VOICEMAIL";
 
 /**
  * Run deterministic phrase analysis on a transcript text.
  * @param {string} text - The transcribed IVR text.
  * @returns {object} - Analyzed signals and outcome decision.
  */
-function analyzeTranscript(text) {
+export function analyzeTranscript(text) {
   if (!text) {
     return {
       card_prompts: 0,
@@ -241,12 +241,4 @@ function analyzeTranscript(text) {
   };
 }
 
-module.exports = {
-  analyzeTranscript,
-  STAGE_LANGUAGE,
-  STAGE_CARD,
-  STAGE_ACTIVATE,
-  STAGE_CODE,
-  STAGE_EXPIRY,
-  STAGE_VOICEMAIL
-};
+

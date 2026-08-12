@@ -1,9 +1,13 @@
-const fs = require('fs');
-const path = require('path');
-const https = require('https');
-const { pipeline } = require('stream');
-const AttemptModel = require('../models/attemptModel');
-const ivrSignals = require('./ivrSignalsService');
+import fs from 'fs';
+import path, { dirname } from 'path';
+import { fileURLToPath } from 'url';
+import https from 'https';
+import { pipeline } from 'stream';
+import * as AttemptModel from '../models/attemptModel.js';
+import * as ivrSignals from './ivrSignalsService.js';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
 
 // Ensure audio directory exists
 const AUDIO_DIR = path.join(__dirname, '../../audio_files');
@@ -11,11 +15,10 @@ if (!fs.existsSync(AUDIO_DIR)) {
   fs.mkdirSync(AUDIO_DIR, { recursive: true });
 }
 
-const TranscriptionService = {
   /**
    * Main entrypoint for processing recording webhook.
    */
-  async processRecording(attemptId, recordingUrl) {
+  export const processRecording = async (attemptId, recordingUrl) => {
     try {
       await AttemptModel.addLog(attemptId, 'Downloading recording from Twilio...');
       
@@ -23,7 +26,7 @@ const TranscriptionService = {
       const localFilePath = path.join(AUDIO_DIR, `attempt_${attemptId}${fileExtension}`);
 
       // 1. Download file
-      await this.downloadFile(recordingUrl, localFilePath);
+      await downloadFile(recordingUrl, localFilePath);
       await AttemptModel.addLog(attemptId, `Recording saved locally to: ${path.basename(localFilePath)}`);
 
       // 2. Transcribe
@@ -33,10 +36,10 @@ const TranscriptionService = {
 
       if (apiKey) {
         await AttemptModel.addLog(attemptId, 'Sending audio to OpenAI Whisper API for transcription...');
-        transcript = await this.transcribeOpenAI(localFilePath, apiKey);
+        transcript = await transcribeOpenAI(localFilePath, apiKey);
       } else if (whisperServer) {
         await AttemptModel.addLog(attemptId, `Sending audio to local Whisper server: ${whisperServer}...`);
-        transcript = await this.transcribeLocalWhisperServer(localFilePath, whisperServer);
+        transcript = await transcribeLocalWhisperServer(localFilePath, whisperServer);
       } else {
         await AttemptModel.addLog(attemptId, 'No transcription service configured. Simulating mock transcription.');
         // Generate a mock transcript matching the 16-digit verification bot dialog
@@ -80,12 +83,12 @@ const TranscriptionService = {
       await AttemptModel.addLog(attemptId, `Transcription/Analysis error: ${error.message}`);
       await AttemptModel.updateAttemptStatus(attemptId, 'failed', 0, { error: error.message });
     }
-  },
+  };
 
   /**
    * Download helper
    */
-  downloadFile(url, destPath) {
+  export const downloadFile = (url, destPath) => {
     return new Promise((resolve, reject) => {
       const file = fs.createWriteStream(destPath);
       https.get(url, (response) => {
@@ -99,12 +102,12 @@ const TranscriptionService = {
         });
       }).on('error', reject);
     });
-  },
+  };
 
   /**
    * OpenAI Whisper API transcription
    */
-  transcribeOpenAI(filePath, apiKey) {
+  export const transcribeOpenAI = (filePath, apiKey) => {
     return new Promise((resolve, reject) => {
       const boundary = '----WebKitFormBoundary' + Math.random().toString(36).substring(2);
       const fsReader = fs.createReadStream(filePath);
@@ -151,12 +154,12 @@ const TranscriptionService = {
         req.end();
       });
     });
-  },
+  };
 
   /**
    * Local Whisper server transcription
    */
-  transcribeLocalWhisperServer(filePath, serverUrl) {
+  export const transcribeLocalWhisperServer = (filePath, serverUrl) => {
     return new Promise((resolve, reject) => {
       const parsedUrl = new URL(serverUrl);
       const boundary = '----WebKitFormBoundary' + Math.random().toString(36).substring(2);
@@ -202,7 +205,4 @@ const TranscriptionService = {
         req.end();
       });
     });
-  }
-};
-
-module.exports = TranscriptionService;
+  };

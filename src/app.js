@@ -1,11 +1,12 @@
-const express = require('express');
-const cors = require('cors');
-require('dotenv').config();
-const { initializeDatabase } = require('./config/db');
-const callRoutes = require('./routes/callRoutes');
+import express from 'express';
+import cors from 'cors';
+import dotenv from 'dotenv';
+dotenv.config();
+import { initializeDatabase } from './config/db.js';
+import callRoutes from './routes/callRoutes.js';
 
-const http = require('http');
-const { initializeWebSocket } = require('./services/websocketService');
+import http from 'http';
+import { initializeWebSocket } from './services/websocketService.js';
 
 const app = express();
 const PORT = process.env.PORT || 5000;
