@@ -1,7 +1,8 @@
 const twilio = require('twilio');
 const AttemptModel = require('../models/attemptModel');
+const PhoneLineModel = require('../models/phoneLineModel');
 const { broadcast } = require('./websocketService');
-const { pool } = require('../config/db');
+const { supabase } = require('../config/db');
 
 // Initialize Twilio client if keys are present
 const accountSid = process.env.TWILIO_ACCOUNT_SID;
@@ -12,16 +13,19 @@ let isCampaignRunning = false;
 let workerInterval = null;
 const MAX_RETRIES = 3;
 
+let campaignLineId = null;
+
 const OrchestratorService = {
   isRunning() {
     return isCampaignRunning;
   },
 
-  async startCampaign() {
+  async startCampaign(phoneNumberId) {
     if (isCampaignRunning) return;
     isCampaignRunning = true;
+    campaignLineId = phoneNumberId ? parseInt(phoneNumberId) : null;
     broadcast('campaign_status', { running: true });
-    console.log('[Orchestrator] Campaign started.');
+    console.log(`[Orchestrator] Campaign started. Selected Line ID: ${campaignLineId || 'All'}`);
     
     // Run the orchestrator loop
     workerInterval = setInterval(async () => {
@@ -36,20 +40,56 @@ const OrchestratorService = {
   async stopCampaign() {
     if (!isCampaignRunning) return;
     isCampaignRunning = false;
+    campaignLineId = null; // Reset
     if (workerInterval) {
       clearInterval(workerInterval);
       workerInterval = null;
     }
     broadcast('campaign_status', { running: false });
     console.log('[Orchestrator] Campaign stopped.');
+    
+    // Hang up all active calls immediately
+    await this.terminateActiveCalls();
+  },
+
+  async terminateActiveCalls() {
+    console.log('[Orchestrator] Terminating active calls...');
+    try {
+      const { data: activeAttempts, error } = await supabase
+        .from('attempts')
+        .select('*')
+        .eq('status', 'active');
+
+      if (error || !activeAttempts || activeAttempts.length === 0) return;
+
+      for (const attempt of activeAttempts) {
+        await AttemptModel.addLog(attempt.id, 'Call manually hung up / aborted by operator.');
+        
+        // If it is a real Twilio call, update status to completed to force hang up
+        if (client && attempt.call_sid && !attempt.call_sid.startsWith('MOCK_SID')) {
+          try {
+            await client.calls(attempt.call_sid).update({ status: 'completed' });
+          } catch (err) {
+            console.error(`Failed to force hangup Call SID ${attempt.call_sid} on Twilio:`, err.message);
+          }
+        }
+
+        // Set state to failed/aborted
+        await AttemptModel.updateAttemptStatus(attempt.id, 'failed', 0, {
+          error: 'Call terminated by operator'
+        });
+      }
+    } catch (err) {
+      console.error('[Orchestrator] Error terminating active calls:', err);
+    }
   },
 
   async tick() {
     if (!isCampaignRunning) return;
 
     // 1. Get all phone lines
-    const lines = await AttemptModel.getAllPhoneLines();
-    const idleLines = lines.filter(l => l.status === 'idle');
+    const lines = await PhoneLineModel.getAllPhoneLines();
+    const idleLines = lines.filter(l => l.status === 'idle' && (!campaignLineId || l.id === campaignLineId));
 
     if (idleLines.length === 0) {
       return; // All lines are busy
@@ -116,7 +156,10 @@ const OrchestratorService = {
           from: line.phone_number,
           statusCallback: `${host}/api/call/status-callback/${attempt.id}`,
           statusCallbackEvent: ['initiated', 'ringing', 'answered', 'completed'],
-          statusCallbackMethod: 'POST'
+          statusCallbackMethod: 'POST',
+          record: true,
+          recordingStatusCallback: `${host}/api/call/recording-callback/${attempt.id}`,
+          recordingStatusCallbackMethod: 'POST'
         });
 
         await AttemptModel.updateCallSid(attempt.id, call.sid);
@@ -131,19 +174,43 @@ const OrchestratorService = {
 
   async checkAndScheduleRetries() {
     // Look for attempts in the current run that have failed and have remaining retries
-    const query = `
-      UPDATE attempts
-      SET status = 'retry', logs = array_append(logs, $1)
-      WHERE status = 'failed' 
-        AND retry_count < $2
-      RETURNING *;
-    `;
+    const { data: failedAttempts, error: fetchErr } = await supabase
+      .from('attempts')
+      .select('*')
+      .eq('status', 'failed')
+      .lt('retry_count', MAX_RETRIES);
+
+    if (fetchErr) {
+      console.error('[Orchestrator] Error fetching attempts for retry:', fetchErr);
+      return;
+    }
+
+    if (!failedAttempts || failedAttempts.length === 0) return;
+
+    const rescheduled = [];
     const logMsg = `[${new Date().toISOString()}] Automatically rescheduled for retry.`;
-    const res = await pool.query(query, [logMsg, MAX_RETRIES]);
-    
-    if (res.rows.length > 0) {
-      console.log(`[Orchestrator] Rescheduled ${res.rows.length} failed attempts for retry.`);
-      res.rows.forEach(attempt => broadcast('attempt_update', attempt));
+
+    for (const attempt of failedAttempts) {
+      const newLogs = [...(attempt.logs || []), logMsg];
+      const { data: updatedAttempt, error: updateErr } = await supabase
+        .from('attempts')
+        .update({
+          status: 'retry',
+          logs: newLogs,
+          updated_at: new Date().toISOString()
+        })
+        .eq('id', attempt.id)
+        .select()
+        .single();
+      
+      if (!updateErr && updatedAttempt) {
+        rescheduled.push(updatedAttempt);
+      }
+    }
+
+    if (rescheduled.length > 0) {
+      console.log(`[Orchestrator] Rescheduled ${rescheduled.length} failed attempts for retry.`);
+      rescheduled.forEach(attempt => broadcast('attempt_update', attempt));
     }
   }
 };

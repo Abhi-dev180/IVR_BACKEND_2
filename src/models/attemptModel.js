@@ -1,263 +1,250 @@
-const { pool } = require('../config/db');
+const { supabase } = require('../config/db');
 const { broadcast } = require('../services/websocketService');
+const PhoneLineModel = require('./phoneLineModel');
 
 const AttemptModel = {
-  // Add a new phone line
-  async addPhoneLine(phoneNumber, maxAttempts = 100) {
-    const query = `
-      INSERT INTO phone_lines (phone_number, max_attempts, status)
-      VALUES ($1, $2, 'idle')
-      ON CONFLICT (phone_number) DO UPDATE
-      SET max_attempts = $2
-      RETURNING *;
-    `;
-    const res = await pool.query(query, [phoneNumber, maxAttempts]);
-    const row = res.rows[0];
-    broadcast('line_update', row);
-    return row;
-  },
-
-  // Get all phone lines
-  async getAllPhoneLines() {
-    const res = await pool.query('SELECT * FROM phone_lines ORDER BY id ASC');
-    return res.rows;
-  },
-
   // Create a new test attempt
   async createAttempt(testValue) {
-    const query = `
-      INSERT INTO attempts (test_value, status, logs)
-      VALUES ($1, 'queued', $2)
-      RETURNING *;
-    `;
     const initialLog = `[${new Date().toISOString()}] Attempt created. Status: queued.`;
-    const res = await pool.query(query, [testValue, [initialLog]]);
-    const row = res.rows[0];
-    broadcast('attempt_update', row);
-    return row;
-  },
-
-  // Get attempts
-  async getAttempts() {
-    const res = await pool.query(`
-      SELECT a.*, p.phone_number 
-      FROM attempts a
-      LEFT JOIN phone_lines p ON a.phone_line_id = p.id
-      ORDER BY a.updated_at DESC
-      LIMIT 100
-    `);
-    return res.rows;
-  },
-
-  // Assign attempt to an idle phone line (Milestone 1 basic single outbound flow)
-  async assignAttemptToLine(attemptId, lineId) {
-    const client = await pool.connect();
-    try {
-      await client.query('BEGIN');
-      
-      // Update phone line status to busy
-      await client.query(`
-        UPDATE phone_lines 
-        SET status = 'busy', current_attempt_id = $1, updated_at = NOW()
-        WHERE id = $2
-      `, [attemptId, lineId]);
-
-      // Update attempt status to active and link line
-      const res = await client.query(`
-        UPDATE attempts 
-        SET status = 'active', phone_line_id = $1, updated_at = NOW(),
-            logs = array_append(logs, $2)
-        WHERE id = $3
-        RETURNING *
-      `, [lineId, `[${new Date().toISOString()}] Call assigned to line ID ${lineId}.`, attemptId]);
-
-      await client.query('COMMIT');
-      
-      const updatedAttempt = res.rows[0];
-      broadcast('attempt_update', updatedAttempt);
-      
-      // Fetch and broadcast line status
-      const lineRes = await pool.query('SELECT * FROM phone_lines WHERE id = $1', [lineId]);
-      if (lineRes.rows[0]) {
-        broadcast('line_update', lineRes.rows[0]);
-      }
-
-      return updatedAttempt;
-    } catch (err) {
-      await client.query('ROLLBACK');
-      throw err;
-    } finally {
-      client.release();
+    const { data, error } = await supabase
+      .from('attempts')
+      .insert({ test_value: testValue, status: 'queued', logs: [initialLog] })
+      .select()
+      .single();
+    
+    if (error) {
+      console.error('Error in createAttempt:', error);
+      throw error;
     }
+    
+    broadcast('attempt_update', data);
+    return data;
+  },
+
+  // Get attempts (with left-joined phone line numbers)
+  async getAttempts() {
+    const { data, error } = await supabase
+      .from('attempts')
+      .select('*, phone_lines(phone_number)')
+      .order('updated_at', { ascending: false })
+      .limit(1000);
+    
+    if (error) {
+      console.error('Error in getAttempts:', error);
+      throw error;
+    }
+
+    return (data || []).map(item => ({
+      ...item,
+      phone_number: item.phone_lines ? item.phone_lines.phone_number : null
+    }));
+  },
+
+  // Assign attempt to a line
+  async assignAttemptToLine(attemptId, lineId) {
+    // Set phone line status to busy
+    await PhoneLineModel.updateLineStatus(lineId, 'busy', attemptId);
+
+    // Fetch attempt to get current logs
+    const { data: attempt, error: fetchErr } = await supabase
+      .from('attempts')
+      .select('logs')
+      .eq('id', attemptId)
+      .single();
+    if (fetchErr) throw fetchErr;
+
+    const logMsg = `[${new Date().toISOString()}] Call assigned to line ID ${lineId}.`;
+    const newLogs = [...(attempt.logs || []), logMsg];
+
+    // Update attempt status to active and link line
+    const { data: updatedAttempt, error: attemptErr } = await supabase
+      .from('attempts')
+      .update({
+        status: 'active',
+        phone_line_id: lineId,
+        updated_at: new Date().toISOString(),
+        logs: newLogs
+      })
+      .eq('id', attemptId)
+      .select()
+      .single();
+
+    if (attemptErr) throw attemptErr;
+    broadcast('attempt_update', updatedAttempt);
+
+    return updatedAttempt;
   },
 
   // Update Call SID for an attempt
   async updateCallSid(attemptId, callSid) {
-    const query = `
-      UPDATE attempts 
-      SET call_sid = $1, updated_at = NOW(),
-          logs = array_append(logs, $2)
-      WHERE id = $3
-      RETURNING *;
-    `;
+    const { data: attempt, error: fetchErr } = await supabase
+      .from('attempts')
+      .select('logs')
+      .eq('id', attemptId)
+      .single();
+    if (fetchErr) throw fetchErr;
+
     const logMsg = `[${new Date().toISOString()}] Call initiated. Twilio Call SID: ${callSid}.`;
-    const res = await pool.query(query, [callSid, logMsg, attemptId]);
-    const row = res.rows[0];
-    broadcast('attempt_update', row);
-    return row;
+    const newLogs = [...(attempt.logs || []), logMsg];
+
+    const { data: updatedAttempt, error: attemptErr } = await supabase
+      .from('attempts')
+      .update({
+        call_sid: callSid,
+        updated_at: new Date().toISOString(),
+        logs: newLogs
+      })
+      .eq('id', attemptId)
+      .select()
+      .single();
+
+    if (attemptErr) throw attemptErr;
+    broadcast('attempt_update', updatedAttempt);
+    return updatedAttempt;
   },
 
   // Find attempt by Call SID
   async findAttemptByCallSid(callSid) {
-    const res = await pool.query('SELECT * FROM attempts WHERE call_sid = $1', [callSid]);
-    return res.rows[0];
+    const { data, error } = await supabase
+      .from('attempts')
+      .select('*')
+      .eq('call_sid', callSid)
+      .maybeSingle();
+    
+    if (error) throw error;
+    return data;
   },
 
   // Add a log message to an attempt
   async addLog(attemptId, logMessage) {
-    const query = `
-      UPDATE attempts 
-      SET logs = array_append(logs, $1), updated_at = NOW()
-      WHERE id = $2
-      RETURNING *;
-    `;
     const formattedLog = `[${new Date().toISOString()}] ${logMessage}`;
-    const res = await pool.query(query, [formattedLog, attemptId]);
-    const row = res.rows[0];
-    broadcast('attempt_update', row);
-    return row;
+
+    const { data: attempt, error: fetchErr } = await supabase
+      .from('attempts')
+      .select('logs')
+      .eq('id', attemptId)
+      .single();
+    if (fetchErr) throw fetchErr;
+
+    const newLogs = [...(attempt.logs || []), formattedLog];
+
+    const { data: updatedAttempt, error: attemptErr } = await supabase
+      .from('attempts')
+      .update({
+        logs: newLogs,
+        updated_at: new Date().toISOString()
+      })
+      .eq('id', attemptId)
+      .select()
+      .single();
+
+    if (attemptErr) throw attemptErr;
+    broadcast('attempt_update', updatedAttempt);
+    return updatedAttempt;
   },
 
   // Create a batch of attempts from JSON targets
   async createAttemptBatch(targets, batchId) {
-    const client = await pool.connect();
-    try {
-      await client.query('BEGIN');
-      const inserted = [];
-      for (const t of targets) {
-        const query = `
-          INSERT INTO attempts (target_phone_number, test_value, batch_id, status, logs)
-          VALUES ($1, $2, $3, 'queued', $4)
-          RETURNING *;
-        `;
-        const logMsg = `[${new Date().toISOString()}] Attempt created in batch: ${batchId}. Status: queued.`;
-        const res = await client.query(query, [t.phone_number, t.test_value, batchId, [logMsg]]);
-        inserted.push(res.rows[0]);
-      }
-      await client.query('COMMIT');
+    const inserted = [];
+    
+    for (const t of targets) {
+      const logMsg = `[${new Date().toISOString()}] Attempt created in batch: ${batchId}. Status: queued.`;
+      const { data, error } = await supabase
+        .from('attempts')
+        .insert({
+          target_phone_number: t.phone_number,
+          test_value: t.test_value,
+          batch_id: batchId,
+          status: 'queued',
+          logs: [logMsg]
+        })
+        .select()
+        .single();
       
-      inserted.forEach(attempt => broadcast('attempt_update', attempt));
-      return inserted;
-    } catch (err) {
-      await client.query('ROLLBACK');
-      throw err;
-    } finally {
-      client.release();
+      if (error) throw error;
+      inserted.push(data);
     }
+    
+    inserted.forEach(attempt => broadcast('attempt_update', attempt));
+    return inserted;
   },
 
-  // Get next claimable attempt using skip locked
+  // Claim next queued or retry attempt
   async claimNextQueuedAttempt(lineId) {
-    const client = await pool.connect();
-    try {
-      await client.query('BEGIN');
-      
-      const attemptRes = await client.query(`
-        SELECT * FROM attempts 
-        WHERE status IN ('queued', 'retry') 
-        ORDER BY id ASC 
-        LIMIT 1 
-        FOR UPDATE SKIP LOCKED
-      `);
-      
-      const attempt = attemptRes.rows[0];
-      if (!attempt) {
-        await client.query('COMMIT');
-        return null;
-      }
-      
-      await client.query(`
-        UPDATE phone_lines 
-        SET status = 'busy', current_attempt_id = $1, updated_at = NOW()
-        WHERE id = $2
-      `, [attempt.id, lineId]);
+    // 1. First look for new uncalled queued attempts
+    let { data: attempt, error: fetchErr } = await supabase
+      .from('attempts')
+      .select('*')
+      .eq('status', 'queued')
+      .order('id', { ascending: true })
+      .limit(1)
+      .maybeSingle();
 
-      const logMsg = `[${new Date().toISOString()}] Claimed by line ID ${lineId}. Status: active.`;
-      const res = await client.query(`
-        UPDATE attempts 
-        SET status = 'active', phone_line_id = $1, updated_at = NOW(),
-            logs = array_append(logs, $2), retry_count = retry_count + 1
-        WHERE id = $3
-        RETURNING *
-      `, [lineId, logMsg, attempt.id]);
+    if (fetchErr) throw fetchErr;
 
-      await client.query('COMMIT');
-      
-      const updatedAttempt = res.rows[0];
-      broadcast('attempt_update', updatedAttempt);
-      
-      const lineRes = await pool.query('SELECT * FROM phone_lines WHERE id = $1', [lineId]);
-      if (lineRes.rows[0]) {
-        broadcast('line_update', lineRes.rows[0]);
-      }
+    // 2. If no new queued attempts exist, look for retry attempts
+    if (!attempt) {
+      const { data: retryAttempt, error: retryErr } = await supabase
+        .from('attempts')
+        .select('*')
+        .eq('status', 'retry')
+        .order('id', { ascending: true })
+        .limit(1)
+        .maybeSingle();
 
-      return updatedAttempt;
-    } catch (err) {
-      await client.query('ROLLBACK');
-      throw err;
-    } finally {
-      client.release();
+      if (retryErr) throw retryErr;
+      attempt = retryAttempt;
     }
+
+    if (!attempt) return null;
+    // Assign to line
+    return await this.assignAttemptToLine(attempt.id, lineId);
   },
 
   // Update attempt status and duration
   async updateAttemptStatus(attemptId, status, duration = 0, resultDetails = {}) {
-    const client = await pool.connect();
-    try {
-      await client.query('BEGIN');
+    const { data: attempt, error: fetchErr } = await supabase
+      .from('attempts')
+      .select('*')
+      .eq('id', attemptId)
+      .single();
+    if (fetchErr) throw fetchErr;
 
-      const logMsg = `[${new Date().toISOString()}] Status updated to: ${status}.`;
+    const logMsg = `[${new Date().toISOString()}] Status updated to: ${status}.`;
+    const newLogs = [...(attempt.logs || []), logMsg];
+
+    const { data: updatedAttempt, error: attemptErr } = await supabase
+      .from('attempts')
+      .update({
+        status: status,
+        duration: duration,
+        result_details: resultDetails,
+        updated_at: new Date().toISOString(),
+        logs: newLogs
+      })
+      .eq('id', attemptId)
+      .select()
+      .single();
+
+    if (attemptErr) throw attemptErr;
+
+    // If completing or failing, free the phone line
+    if (['completed', 'failed'].includes(status) && updatedAttempt && updatedAttempt.phone_line_id) {
+      const { data: line, error: lineFetchErr } = await supabase
+        .from('phone_lines')
+        .select('attempts_processed')
+        .eq('id', updatedAttempt.phone_line_id)
+        .single();
       
-      const res = await client.query(`
-        UPDATE attempts 
-        SET status = $1, duration = $2, result_details = $3, updated_at = NOW(),
-            logs = array_append(logs, $4)
-        WHERE id = $5
-        RETURNING *;
-      `, [status, duration, resultDetails, logMsg, attemptId]);
-
-      // If completing or failing, free the phone line
-      if (['completed', 'failed'].includes(status)) {
-        const attempt = res.rows[0];
-        if (attempt && attempt.phone_line_id) {
-          await client.query(`
-            UPDATE phone_lines 
-            SET status = 'idle', current_attempt_id = NULL, 
-                attempts_processed = attempts_processed + 1, updated_at = NOW()
-            WHERE id = $1
-          `, [attempt.phone_line_id]);
-        }
+      if (!lineFetchErr && line) {
+        await PhoneLineModel.updateLineStatus(updatedAttempt.phone_line_id, 'idle', null, {
+          attempts_processed: (line.attempts_processed || 0) + 1
+        });
       }
-
-      await client.query('COMMIT');
-      
-      const updatedAttempt = res.rows[0];
-      broadcast('attempt_update', updatedAttempt);
-      
-      if (['completed', 'failed'].includes(status) && updatedAttempt && updatedAttempt.phone_line_id) {
-        const lineRes = await pool.query('SELECT * FROM phone_lines WHERE id = $1', [updatedAttempt.phone_line_id]);
-        if (lineRes.rows[0]) {
-          broadcast('line_update', lineRes.rows[0]);
-        }
-      }
-
-      return updatedAttempt;
-    } catch (err) {
-      await client.query('ROLLBACK');
-      throw err;
-    } finally {
-      client.release();
     }
+
+    broadcast('attempt_update', updatedAttempt);
+    return updatedAttempt;
   }
 };
 

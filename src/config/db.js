@@ -1,77 +1,93 @@
-const { Pool } = require('pg');
+const { createClient } = require('@supabase/supabase-js');
 require('dotenv').config();
 
-let connectionString = process.env.DATABASE_URL;
+const supabaseUrl = process.env.SUPABASE_URL;
+const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
 
-// Automatically map 'db' host to 'localhost' for local Windows execution
-if (process.platform === 'win32' && connectionString && connectionString.includes('@db:')) {
-  connectionString = connectionString.replace('@db:', '@localhost:');
+if (!supabaseUrl || !supabaseKey || supabaseKey.includes('YOUR_SUPABASE_SERVICE_ROLE_KEY')) {
+  console.warn('\n======================================================');
+  console.warn('WARNING: Missing or default SUPABASE_SERVICE_ROLE_KEY.');
+  console.warn('Please fill in SUPABASE_SERVICE_ROLE_KEY in backend/.env');
+  console.warn('======================================================\n');
 }
 
-const isLocalhost = connectionString && (connectionString.includes('localhost') || connectionString.includes('127.0.0.1'));
-
-const pool = new Pool({
-  connectionString,
-  ssl: isLocalhost ? false : {
-    rejectUnauthorized: false
+const supabase = createClient(supabaseUrl || 'https://placeholder.supabase.co', supabaseKey || 'placeholder', {
+  auth: {
+    persistSession: false
   }
 });
 
 const initializeDatabase = async () => {
-  const client = await pool.connect();
+  console.log('Supabase HTTP client initialized successfully.');
+  
   try {
-    console.log('Initializing database tables...');
-    
-    // Create phone_lines table
-    await client.query(`
-      CREATE TABLE IF NOT EXISTS phone_lines (
-        id SERIAL PRIMARY KEY,
-        phone_number VARCHAR(50) UNIQUE NOT NULL,
-        status VARCHAR(50) DEFAULT 'idle',
-        current_attempt_id INTEGER,
-        max_attempts INTEGER DEFAULT 100,
-        attempts_processed INTEGER DEFAULT 0,
-        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-      );
-    `);
+    const { error } = await supabase
+      .from('phone_lines')
+      .update({ status: 'idle', current_attempt_id: null })
+      .neq('id', 0); // Target all lines safely
 
-    // Create attempts table
-    await client.query(`
-      CREATE TABLE IF NOT EXISTS attempts (
-        id SERIAL PRIMARY KEY,
-        phone_line_id INTEGER REFERENCES phone_lines(id) ON DELETE SET NULL,
-        target_phone_number VARCHAR(50),
-        batch_id VARCHAR(100),
-        test_value VARCHAR(50) NOT NULL,
-        status VARCHAR(50) DEFAULT 'queued',
-        call_sid VARCHAR(100) UNIQUE,
-        logs TEXT[] DEFAULT '{}',
-        duration INTEGER DEFAULT 0,
-        result_details JSONB DEFAULT '{}',
-        retry_count INTEGER DEFAULT 0,
-        error_message TEXT,
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-      );
-    `);
+    if (error) {
+      console.error('Failed to reset phone lines status on boot:', error);
+    } else {
+      console.log('Successfully reset all phone lines status to idle on startup.');
+    }
+  } catch (err) {
+    console.error('Error resetting phone lines on startup:', err);
+  }
 
-    // Dynamic schema migration in case table already exists
-    await client.query(`
-      ALTER TABLE attempts ADD COLUMN IF NOT EXISTS target_phone_number VARCHAR(50);
-      ALTER TABLE attempts ADD COLUMN IF NOT EXISTS batch_id VARCHAR(100);
-      ALTER TABLE attempts ADD COLUMN IF NOT EXISTS retry_count INTEGER DEFAULT 0;
-      ALTER TABLE attempts ADD COLUMN IF NOT EXISTS error_message TEXT;
-    `);
+  // Verify admins table exists and seed default admin
+  try {
+    const { data: admins, error: selectError } = await supabase
+      .from('admins')
+      .select('*')
+      .limit(1);
 
-    console.log('Database tables verified/created successfully.');
-  } catch (error) {
-    console.error('Error initializing database:', error);
-  } finally {
-    client.release();
+    if (selectError) {
+      console.warn('\n======================================================');
+      console.warn('WARNING: Could not fetch from "admins" table. It may not exist!');
+      console.warn('Error details:', selectError.message);
+      console.warn('Please run the following SQL command in your Supabase SQL Editor:');
+      console.warn(`
+        CREATE TABLE IF NOT EXISTS admins (
+          id SERIAL PRIMARY KEY,
+          email VARCHAR(255) UNIQUE NOT NULL,
+          password_hash VARCHAR(255) NOT NULL,
+          role VARCHAR(50) DEFAULT 'admin',
+          created_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now())
+        );
+      `);
+      console.warn('======================================================\n');
+    } else {
+      // Check if admin is already seeded
+      const { data: adminCount, error: countErr } = await supabase
+        .from('admins')
+        .select('*', { count: 'exact', head: true });
+        
+      if (!countErr && (adminCount === 0 || adminCount === null)) {
+        console.log('Seeding default administrator account...');
+        const bcrypt = require('bcryptjs');
+        const defaultHash = await bcrypt.hash('admin123', 10);
+        const { error: insertError } = await supabase
+          .from('admins')
+          .insert({
+            email: 'admin@mail.com',
+            password_hash: defaultHash,
+            role: 'admin'
+          });
+          
+        if (insertError) {
+          console.error('Failed to seed default admin:', insertError.message);
+        } else {
+          console.log('Default admin seeded: admin@mail.com / admin123');
+        }
+      }
+    }
+  } catch (err) {
+    console.error('Error during database schema checks:', err);
   }
 };
 
 module.exports = {
-  pool,
+  supabase,
   initializeDatabase
 };
