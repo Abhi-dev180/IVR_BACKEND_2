@@ -23,18 +23,30 @@ const initializeDatabase = async () => {
   console.log('Supabase HTTP client initialized successfully.');
 
   try {
-    const { error } = await supabase
+    const { error: lineError } = await supabase
       .from('phone_lines')
       .update({ status: 'idle', current_attempt_id: null })
       .neq('id', 0); // Target all lines safely
 
-    if (error) {
-      console.error('Failed to reset phone lines status on boot:', error);
+    if (lineError) {
+      console.error('Failed to reset phone lines status on boot:', lineError);
     } else {
       console.log('Successfully reset all phone lines status to idle on startup.');
     }
+
+    // Crash Recovery: Reset stuck 'active' attempts to 'retry'
+    const { error: attemptError } = await supabase
+      .from('attempts')
+      .update({ status: 'retry' })
+      .eq('status', 'active');
+
+    if (attemptError) {
+      console.error('Failed to reset stuck attempts on boot:', attemptError);
+    } else {
+      console.log('Successfully swept stuck active attempts to retry.');
+    }
   } catch (err) {
-    console.error('Error resetting phone lines on startup:', err);
+    console.error('Error during crash recovery on startup:', err);
   }
 
   // Verify admins table exists and seed default admin

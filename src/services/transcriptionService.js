@@ -45,11 +45,11 @@ if (!fs.existsSync(AUDIO_DIR)) {
         // Generate a mock transcript matching the 16-digit verification bot dialog
         const rand = Math.random();
         if (rand < 0.70) {
-          transcript = "hi, i am the automated verification bot. please enter your sixteen digit card number. card number verified successfully. goodbye.";
+          transcript = "please enter your card number. thank you, enter or say the four digit expiry date.";
         } else if (rand < 0.90) {
-          transcript = "hi, i am the automated verification bot. please enter your sixteen digit card number. sorry, the card number entered does not match our records. goodbye.";
+          transcript = "please enter your card number. you have entered an invalid three digit security code.";
         } else {
-          transcript = "no response received. goodbye.";
+          transcript = "please call us back"; // Lockout
         }
       }
 

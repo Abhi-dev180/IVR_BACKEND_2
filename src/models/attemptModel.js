@@ -1,13 +1,32 @@
 import { supabase } from '../config/db.js';
+
+// Helper to broadcast attempts with joined phone_number
+const broadcastWithPhone = async (attemptId) => {
+  const { data: fullAttempt } = await supabase
+    .from('attempts')
+    .select('*, phone_lines(phone_number)')
+    .eq('id', attemptId)
+    .single();
+    
+  if (fullAttempt) {
+    const formatted = {
+      ...fullAttempt,
+      phone_number: fullAttempt.phone_lines ? fullAttempt.phone_lines.phone_number : null
+    };
+    broadcast('attempt_update', formatted);
+    return formatted;
+  }
+  return null;
+};
 import { broadcast } from '../services/websocketService.js';
 import * as PhoneLineModel from './phoneLineModel.js';
 
 // Create a new test attempt
-export const createAttempt = async (testValue) => {
+export const createAttempt = async (testValue, targetPhoneNumber) => {
     const initialLog = `[${new Date().toISOString()}] Attempt created. Status: queued.`;
     const { data, error } = await supabase
       .from('attempts')
-      .insert({ test_value: testValue, status: 'queued', logs: [initialLog] })
+      .insert({ test_value: testValue, target_phone_number: targetPhoneNumber, status: 'queued', logs: [initialLog] })
       .select()
       .single();
     
@@ -69,7 +88,7 @@ export const createAttempt = async (testValue) => {
       .single();
 
     if (attemptErr) throw attemptErr;
-    broadcast('attempt_update', updatedAttempt);
+    await broadcastWithPhone(updatedAttempt.id);
 
     return updatedAttempt;
   };
@@ -98,7 +117,7 @@ export const createAttempt = async (testValue) => {
       .single();
 
     if (attemptErr) throw attemptErr;
-    broadcast('attempt_update', updatedAttempt);
+    await broadcastWithPhone(updatedAttempt.id);
     return updatedAttempt;
   };
 
@@ -138,66 +157,82 @@ export const createAttempt = async (testValue) => {
       .single();
 
     if (attemptErr) throw attemptErr;
-    broadcast('attempt_update', updatedAttempt);
+    await broadcastWithPhone(updatedAttempt.id);
     return updatedAttempt;
   };
 
   // Create a batch of attempts from JSON targets
   export const createAttemptBatch = async (targets, batchId) => {
-    const inserted = [];
-    
-    for (const t of targets) {
-      const logMsg = `[${new Date().toISOString()}] Attempt created in batch: ${batchId}. Status: queued.`;
-      const { data, error } = await supabase
-        .from('attempts')
-        .insert({
-          target_phone_number: t.phone_number,
-          test_value: t.test_value,
-          batch_id: batchId,
-          status: 'queued',
-          logs: [logMsg]
-        })
-        .select()
-        .single();
-      
-      if (error) throw error;
-      inserted.push(data);
-    }
-    
-    inserted.forEach(attempt => broadcast('attempt_update', attempt));
-    return inserted;
+    const recordsToInsert = targets.map(t => ({
+      target_phone_number: t.phone_number,
+      test_value: t.test_value,
+      batch_id: batchId,
+      status: 'queued',
+      logs: [`[${new Date().toISOString()}] Attempt created in batch: ${batchId}. Status: queued.`]
+    }));
+
+    const { data, error } = await supabase
+      .from('attempts')
+      .insert(recordsToInsert)
+      .select();
+
+    if (error) throw error;
+
+    data.forEach(attempt => broadcast('attempt_update', attempt));
+    return data;
   };
 
-  // Claim next queued or retry attempt
+  // Claim next queued or retry attempt using PostgreSQL FOR UPDATE SKIP LOCKED
   export const claimNextQueuedAttempt = async (lineId) => {
-    // 1. First look for new uncalled queued attempts
-    let { data: attempt, error: fetchErr } = await supabase
-      .from('attempts')
-      .select('*')
-      .eq('status', 'queued')
-      .order('id', { ascending: true })
-      .limit(1)
-      .maybeSingle();
+    // We call the stored procedure to atomically lock and claim an attempt
+    const { data: attempt, error: fetchErr } = await supabase
+      .rpc('claim_next_attempt', { p_line_id: lineId });
 
-    if (fetchErr) throw fetchErr;
-
-    // 2. If no new queued attempts exist, look for retry attempts
-    if (!attempt) {
-      const { data: retryAttempt, error: retryErr } = await supabase
+    if (fetchErr) {
+      console.warn('⚠️ RPC claim_next_attempt failed or missing. Falling back to non-atomic claim:', fetchErr.message);
+      
+      // Fallback: standard select and assign (less safe for high concurrency, but ensures system works without SQL script)
+      let { data: fbAttempt } = await supabase
         .from('attempts')
         .select('*')
-        .eq('status', 'retry')
+        .eq('status', 'queued')
         .order('id', { ascending: true })
         .limit(1)
         .maybeSingle();
 
-      if (retryErr) throw retryErr;
-      attempt = retryAttempt;
+      if (!fbAttempt) {
+        const { data: retryAttempt } = await supabase
+          .from('attempts')
+          .select('*')
+          .eq('status', 'retry')
+          .order('id', { ascending: true })
+          .limit(1)
+          .maybeSingle();
+        fbAttempt = retryAttempt;
+      }
+
+      if (!fbAttempt) return null;
+      return await assignAttemptToLine(fbAttempt.id, lineId);
     }
 
-    if (!attempt) return null;
-    // Assign to line
-    return await assignAttemptToLine(attempt.id, lineId);
+    // Extract single attempt if RPC returned an array
+    const claimedAttempt = Array.isArray(attempt) ? attempt[0] : attempt;
+
+    if (!claimedAttempt || !claimedAttempt.id) return null;
+
+    // Fetch the updated attempt details to get full logs etc.
+    const { data: fullAttempt } = await supabase
+      .from('attempts')
+      .select('*')
+      .eq('id', claimedAttempt.id)
+      .single();
+
+    if (fullAttempt) {
+      await broadcastWithPhone(fullAttempt.id);
+      return fullAttempt;
+    }
+    
+    return claimedAttempt;
   };
 
   // Update attempt status and duration
@@ -242,6 +277,9 @@ export const createAttempt = async (testValue) => {
       }
     }
 
-    broadcast('attempt_update', updatedAttempt);
+    await broadcastWithPhone(updatedAttempt.id);
+
     return updatedAttempt;
   };
+
+

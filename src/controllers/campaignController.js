@@ -15,6 +15,17 @@ export const getDashboardStatus = async (req, res) => {
       const lines = await PhoneLineModel.getAllPhoneLines();
       const attempts = await AttemptModel.getAttempts();
       const campaignRunning = OrchestratorService.isRunning();
+      
+      // Augment busy lines with the target number they are currently calling
+      lines.forEach(line => {
+        if (line.status === 'busy' && line.current_attempt_id) {
+          const activeAttempt = attempts.find(a => a.id === line.current_attempt_id);
+          if (activeAttempt) {
+            line.target_phone_number = activeAttempt.target_phone_number;
+          }
+        }
+      });
+
       return res.status(200).json({ lines, attempts, campaignRunning });
     } catch (error) {
       console.error('Error fetching dashboard status:', error);
@@ -56,7 +67,7 @@ export const getDashboardStatus = async (req, res) => {
 
     try {
       // 1. Create a persistent test attempt
-      const attempt = await AttemptModel.createAttempt(testValue);
+      const attempt = await AttemptModel.createAttempt(testValue, toPhoneNumber || '+1234567890');
       
       // 2. Fetch/Validate the phone line
       const lines = await PhoneLineModel.getAllPhoneLines();
@@ -122,18 +133,24 @@ export const getDashboardStatus = async (req, res) => {
 
   // Start campaign from JSON targets
   export const startCampaign = async (req, res) => {
-    const { phoneNumberId } = req.body;
+    const { phoneNumberId, testValue, maxRetries } = req.body;
     try {
-      const targets = JSON.parse(fs.readFileSync(new URL('../config/test_targets.json', import.meta.url)));
-      const batchId = `batch-${Date.now()}`;
-      
-      // Load batch into database
+      const batchId = `BATCH_${Date.now()}`;
+      // Basic mock implementation reading targets from config
+      // In production, this would parse a CSV upload or a larger DB table
+      let targets = JSON.parse(fs.readFileSync(new URL('../config/test_targets.json', import.meta.url)));
+
+      // If user provided a specific testValue, override the targets
+      if (testValue && testValue.trim() !== '') {
+        targets = targets.map(t => ({ ...t, test_value: testValue }));
+      }
+
       await AttemptModel.createAttemptBatch(targets, batchId);
       
-      // Start orchestrator loop using the selected line
-      OrchestratorService.startCampaign(phoneNumberId);
+      // Start orchestrator loop using the selected line and specified max retries
+      OrchestratorService.startCampaign(phoneNumberId, maxRetries);
 
-      return res.status(200).json({ message: 'Campaign started successfully.', batchId });
+      return res.status(200).json({ message: 'Campaign started successfully.', batchId, targetCount: targets.length });
     } catch (error) {
       console.error('Error starting campaign:', error);
       return res.status(500).json({ error: error.message });

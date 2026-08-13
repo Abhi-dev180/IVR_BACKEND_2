@@ -11,7 +11,7 @@ const client = accountSid && authToken ? twilio(accountSid, authToken) : null;
 
 let isCampaignRunning = false;
 let workerInterval = null;
-const MAX_RETRIES = 3;
+let maxRetries = 3;
 
 let campaignLineId = null;
 
@@ -19,9 +19,10 @@ export const isRunning = () => {
     return isCampaignRunning;
 };
 
-export const startCampaign = async (phoneNumberId) => {
+export const startCampaign = async (phoneNumberId, maxRetriesVal = 3) => {
     if (isCampaignRunning) return;
     isCampaignRunning = true;
+    maxRetries = maxRetriesVal;
     campaignLineId = phoneNumberId ? parseInt(phoneNumberId) : null;
     broadcast('campaign_status', { running: true });
     console.log(`[Orchestrator] Campaign started. Selected Line ID: ${campaignLineId || 'All'}`);
@@ -101,6 +102,17 @@ export const tick = async () => {
       if (!attempt) {
         // No queued attempts. Check if we have failed attempts that should be retried.
         await checkAndScheduleRetries();
+        
+        // Auto-stop campaign if there are absolutely no active, queued, or retry attempts left
+        const { count, error } = await supabase
+          .from('attempts')
+          .select('*', { count: 'exact', head: true })
+          .in('status', ['queued', 'retry', 'active']);
+          
+        if (!error && count === 0) {
+          console.log('[Orchestrator] All queues are completely empty. Auto-stopping campaign.');
+          await stopCampaign();
+        }
         break; 
       }
 
@@ -115,59 +127,51 @@ export const executeCall = async (attempt, line) => {
     const host = process.env.SERVER_URL || 'http://localhost:5000';
 
     if (!client) {
-      // MOCK MODE
-      console.log(`[Mock Mode] Simulating call from ${line.phone_number} to ${attempt.target_phone_number}`);
-      await AttemptModel.addLog(attempt.id, `[Mock] Initiating call to target: ${attempt.target_phone_number}...`);
-
+      console.log(`[Orchestrator] Twilio credentials missing. Simulating Mock Call for Attempt #${attempt.id}...`);
+      await AttemptModel.addLog(attempt.id, 'Running in Mock Mode. Simulating call...');
+      
       setTimeout(async () => {
-        const mockSid = `MOCK_SID_${Math.random().toString(36).substring(7).toUpperCase()}`;
-        await AttemptModel.updateCallSid(attempt.id, mockSid);
-        await AttemptModel.addLog(attempt.id, '[Mock] Call connected. Waiting 5s for IVR prompt...');
-
-        setTimeout(async () => {
-          await AttemptModel.addLog(attempt.id, `[Mock] IVR Prompt received. Transmitting 16-digit DTMF: ${attempt.test_value}`);
-
+        await AttemptModel.updateCallSid(attempt.id, `MOCK_SID_${Date.now()}`);
+        
+        // Simulate different outcomes based on the test value for testing UI
+        if (attempt.test_value && attempt.test_value.endsWith('FAILED')) {
+          await AttemptModel.addLog(attempt.id, 'Mock Call: Invalid card number rejected by IVR.');
+          await AttemptModel.updateAttemptStatus(attempt.id, 'failed', 5, { error: 'Invalid card rejected' });
+        } else if (attempt.test_value && attempt.test_value.endsWith('NOANSWER')) {
+          await AttemptModel.addLog(attempt.id, 'Mock Call: The target IVR number did not answer.');
+          await AttemptModel.updateAttemptStatus(attempt.id, 'failed', 10, { error: 'No Answer' });
+        } else {
+          await AttemptModel.addLog(attempt.id, 'Mock Call Answered. Simulating wait...');
           setTimeout(async () => {
-            // Decide outcome: 70% Success, 20% Failed, 10% Inconclusive/Pending
-            const rand = Math.random();
-            if (rand < 0.70) {
-              await AttemptModel.addLog(attempt.id, '[Mock] Success: Expected confirmation tone detected.');
-              await AttemptModel.updateAttemptStatus(attempt.id, 'completed', 15, { result: 'success' });
-            } else if (rand < 0.90) {
-              await AttemptModel.addLog(attempt.id, '[Mock] Failure: Busy tone or failed response phrase.');
-              await AttemptModel.updateAttemptStatus(attempt.id, 'failed', 12, { result: 'failed', error: 'Invalid response phrase' });
-            } else {
-              await AttemptModel.addLog(attempt.id, '[Mock] Inconclusive: Call timed out / pending.');
-              await AttemptModel.updateAttemptStatus(attempt.id, 'failed', 20, { result: 'inconclusive', error: 'Pending IVR response' });
-            }
+            await AttemptModel.addLog(attempt.id, `Mock DTMF Sent: ${attempt.test_value}`);
+            await AttemptModel.updateAttemptStatus(attempt.id, 'completed', 15, { note: 'Mock successful run' });
           }, 3000);
+        }
+      }, 1500);
 
-        }, 3000);
+      return;
+    }
 
-      }, 1000);
+    // REAL TWILIO CALL
+    try {
+      const call = await client.calls.create({
+        url: `${host}/api/call/twiml/${attempt.id}`,
+        to: attempt.target_phone_number,
+        from: line.phone_number,
+        statusCallback: `${host}/api/call/status-callback/${attempt.id}`,
+        statusCallbackEvent: ['initiated', 'ringing', 'answered', 'completed'],
+        statusCallbackMethod: 'POST',
+        record: true,
+        recordingStatusCallback: `${host}/api/call/recording-callback/${attempt.id}`,
+        recordingStatusCallbackMethod: 'POST'
+      });
 
-    } else {
-      // REAL TWILIO CALL
-      try {
-        const call = await client.calls.create({
-          url: `${host}/api/call/twiml/${attempt.id}`,
-          to: attempt.target_phone_number,
-          from: line.phone_number,
-          statusCallback: `${host}/api/call/status-callback/${attempt.id}`,
-          statusCallbackEvent: ['initiated', 'ringing', 'answered', 'completed'],
-          statusCallbackMethod: 'POST',
-          record: true,
-          recordingStatusCallback: `${host}/api/call/recording-callback/${attempt.id}`,
-          recordingStatusCallbackMethod: 'POST'
-        });
-
-        await AttemptModel.updateCallSid(attempt.id, call.sid);
-        await AttemptModel.addLog(attempt.id, `Call successfully placed via Twilio. SID: ${call.sid}`);
-      } catch (err) {
-        console.error(`[Orchestrator] Twilio Call failed for Attempt #${attempt.id}:`, err);
-        await AttemptModel.addLog(attempt.id, `Twilio error: ${err.message}`);
-        await AttemptModel.updateAttemptStatus(attempt.id, 'failed', 0, { error: err.message });
-      }
+      await AttemptModel.updateCallSid(attempt.id, call.sid);
+      await AttemptModel.addLog(attempt.id, `Call successfully placed via Twilio. SID: ${call.sid}`);
+    } catch (err) {
+      console.error(`[Orchestrator] Twilio Call failed for Attempt #${attempt.id}:`, err);
+      await AttemptModel.addLog(attempt.id, `Twilio error: ${err.message}`);
+      await AttemptModel.updateAttemptStatus(attempt.id, 'failed', 0, { error: err.message });
     }
 };
 
@@ -177,7 +181,7 @@ export const checkAndScheduleRetries = async () => {
       .from('attempts')
       .select('*')
       .eq('status', 'failed')
-      .lt('retry_count', MAX_RETRIES);
+      .lt('retry_count', maxRetries);
 
     if (fetchErr) {
       console.error('[Orchestrator] Error fetching attempts for retry:', fetchErr);

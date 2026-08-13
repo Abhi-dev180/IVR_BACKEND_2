@@ -34,7 +34,4 @@ router.post('/status-callback/:attemptId', TwilioWebhookController.handleStatusC
 // Twilio webhook recording callback
 router.post('/recording-callback/:attemptId', TwilioWebhookController.handleRecordingCallback);
 
-// Twilio webhook interactive gather callback
-router.post('/verify-gather/:attemptId', TwilioWebhookController.handleGatherCallback);
-
 export default router;

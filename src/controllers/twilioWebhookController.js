@@ -3,34 +3,38 @@ import * as AttemptModel from '../models/attemptModel.js';
 import * as transcriptionService from '../services/transcriptionService.js';
 import { supabase } from '../config/db.js';
 
-// Generate TwiML for when the call is answered (Interactive Verification Bot Flow)
+// Generate TwiML for when the call is answered (Outbound Automated QA Flow)
 export const getTwiML = async (req, res) => {
   const { attemptId } = req.params;
   try {
-    const attempt = await AttemptModel.addLog(attemptId, 'Call connected. Initiating interactive gather prompt.');
+    const { data: attempt, error: fetchErr } = await supabase
+      .from('attempts')
+      .select('test_value')
+      .eq('id', attemptId)
+      .single();
+
+    if (fetchErr || !attempt) {
+      throw new Error(`Attempt #${attemptId} not found.`);
+    }
+
+    await AttemptModel.addLog(attemptId, 'Call connected. Delaying DTMF transmission for IVR prompt.');
 
     const twiml = new twilio.twiml.VoiceResponse();
-
-    // 1st Gather attempt (20 seconds timeout)
-    const gather1 = twiml.gather({
-      action: `/api/call/verify-gather/${attemptId}`,
-      numDigits: 16,
-      timeout: 20,
-      method: 'POST'
-    });
-    gather1.say("Hi, I am the automated verification bot. Please enter your 16-digit card number.");
-
-    // 2nd Gather attempt (runs if first times out)
-    const gather2 = twiml.gather({
-      action: `/api/call/verify-gather/${attemptId}`,
-      numDigits: 16,
-      timeout: 20,
-      method: 'POST'
-    });
-    gather2.say("We did not receive your input. Please enter your 16-digit card number now.");
-
-    // Hangup if still no input after another 20s (Total 40s)
-    twiml.say("No response received. Goodbye.");
+    
+    // 1. Wait for the receiving IVR to speak its greeting
+    // (Using 5 seconds for testing with your custom Twilio Studio IVR instead of 40s)
+    const waitSeconds = parseInt(process.env.DTMF_WAIT_DELAY_SECONDS) || 5;
+    twiml.pause({ length: waitSeconds });
+    
+    // 2. Play the digits. 'w' characters add 0.5s pause before sending each sequence to ensure the IVR registers it.
+    await AttemptModel.addLog(attemptId, `Sending DTMF sequence: ${attempt.test_value}`);
+    twiml.play({ digits: `wwww${attempt.test_value}` });
+    
+    // 3. Pause to capture the response on the recording
+    // This keeps the call open so the `<Record>` webhook captures the success/failure message from the IVR.
+    twiml.pause({ length: 15 });
+    
+    // 4. End the call
     twiml.hangup();
 
     res.type('text/xml');
@@ -85,61 +89,5 @@ export const handleRecordingCallback = async (req, res) => {
   } catch (error) {
     console.error('Error handling recording callback:', error);
     return res.status(500).send('Error');
-  }
-};
-
-// Webhook for handling interactive DTMF inputs from gather
-export const handleGatherCallback = async (req, res) => {
-  const { attemptId } = req.params;
-  const { Digits } = req.body;
-
-  try {
-    await AttemptModel.addLog(attemptId, `User submitted DTMF card digits: ${Digits}`);
-
-    // Fetch target attempt to verify
-    const { data: attempt, error: fetchErr } = await supabase
-      .from('attempts')
-      .select('*')
-      .eq('id', attemptId)
-      .single();
-
-    if (fetchErr || !attempt) {
-      throw new Error(`Attempt #${attemptId} not found.`);
-    }
-
-    const twiml = new twilio.twiml.VoiceResponse();
-
-    if (Digits === attempt.test_value) {
-      // Success match
-      await AttemptModel.addLog(attemptId, `🎉 Card verification successful! Input matched test value: ${attempt.test_value}`);
-      await AttemptModel.updateAttemptStatus(attemptId, 'completed', 0, {
-        input_digits: Digits,
-        result: 'success',
-        note: 'Interactive verification successful'
-      });
-
-      twiml.say("Thank you. Your card number has been successfully verified. Goodbye.");
-    } else {
-      // Mismatch
-      await AttemptModel.addLog(attemptId, `❌ Card verification failed! Input (${Digits}) did not match expected: ${attempt.test_value}`);
-      await AttemptModel.updateAttemptStatus(attemptId, 'failed', 0, {
-        input_digits: Digits,
-        result: 'failed',
-        error: 'Digits mismatch'
-      });
-
-      twiml.say("Sorry, the card number entered does not match our records. Goodbye.");
-    }
-
-    twiml.hangup();
-    res.type('text/xml');
-    return res.send(twiml.toString());
-  } catch (error) {
-    console.error('Error handling gather callback:', error);
-    const twiml = new twilio.twiml.VoiceResponse();
-    twiml.say("An error occurred during verification. Goodbye.");
-    twiml.hangup();
-    res.type('text/xml');
-    return res.send(twiml.toString());
   }
 };
