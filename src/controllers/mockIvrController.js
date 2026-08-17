@@ -8,8 +8,12 @@ export const setMockIvrConfig = async (req, res) => {
         return res.status(400).json({ error: 'Valid 16-digit code is required.' });
     }
 
-    // Generate random 3-digit CVV
-    const randomCvv = Math.floor(Math.random() * 1000).toString().padStart(3, '0');
+    // Generate deterministic 3-digit CVV based on card number
+    let hash = 0;
+    for (let i = 0; i < sixteenDigit.length; i++) {
+        hash = (hash * 31 + sixteenDigit.charCodeAt(i)) % 1000;
+    }
+    const randomCvv = hash.toString().padStart(3, '0');
     
     try {
         const config = await MockIvrModel.saveConfig(sixteenDigit, randomCvv);

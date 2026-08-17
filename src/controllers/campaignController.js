@@ -50,112 +50,7 @@ export const getDashboardStatus = async (req, res) => {
     }
   };
 
-  // Trigger an outbound call (Milestone 1 Core Flow)
-  export const triggerCall = async (req, res) => {
-    const { testValue, phoneNumberId, toPhoneNumber } = req.body;
 
-    // Security: Validate digits to prevent injection or invalid requests
-    if (!testValue || !/^\d{1,16}$/.test(testValue)) {
-      return res.status(400).json({ error: 'Test value must be a sequence of up to 16 numeric digits.' });
-    }
-    if (!phoneNumberId || isNaN(parseInt(phoneNumberId))) {
-      return res.status(400).json({ error: 'Invalid phone line ID.' });
-    }
-    if (toPhoneNumber && !/^\+?[1-9]\d{1,14}$/.test(toPhoneNumber)) {
-      return res.status(400).json({ error: 'Invalid target phone number format.' });
-    }
-
-    try {
-      // 1. Create a persistent test attempt
-      const attempt = await AttemptModel.createAttempt(testValue, toPhoneNumber || '+1234567890');
-      
-      // 2. Fetch/Validate the phone line
-      const lines = await PhoneLineModel.getAllPhoneLines();
-      const line = lines.find(l => l.id === parseInt(phoneNumberId)) || lines[0];
-
-      if (!line) {
-        return res.status(400).json({ error: 'No phone line configured.' });
-      }
-
-      // Assign attempt to line
-      const updatedAttempt = await AttemptModel.assignAttemptToLine(attempt.id, line.id);
-
-      // Base callback URL
-      const host = process.env.SERVER_URL || `${req.protocol}://${req.get('host')}`;
-
-      // 3. Initiate Twilio outbound call
-      if (!client) {
-        // Mock execution if Twilio details are not configured yet
-        console.log('Twilio credentials missing. Running in mock/simulation mode.');
-        await AttemptModel.addLog(attempt.id, 'Running in Mock Mode. Simulating call...');
-        
-        setTimeout(async () => {
-          await AttemptModel.updateCallSid(attempt.id, `MOCK_SID_${Date.now()}`);
-          await AttemptModel.addLog(attempt.id, 'Mock Call Answered. Simulating wait...');
-          
-          setTimeout(async () => {
-            await AttemptModel.addLog(attempt.id, `Mock DTMF Sent: ${testValue}`);
-            await AttemptModel.updateAttemptStatus(attempt.id, 'completed', 15, { note: 'Mock successful run' });
-          }, 3000);
-        }, 1500);
-
-        return res.status(200).json({
-          message: 'Call initiated in mock simulation mode.',
-          attempt: updatedAttempt
-        });
-      }
-
-      // Real Twilio Outbound Call
-      const call = await client.calls.create({
-        url: `${host}/api/call/twiml/${attempt.id}`,
-        to: toPhoneNumber || '+1234567890', // Default fictitious/test IVR number
-        from: line.phone_number,
-        statusCallback: `${host}/api/call/status-callback/${attempt.id}`,
-        statusCallbackEvent: ['initiated', 'ringing', 'answered', 'completed'],
-        statusCallbackMethod: 'POST',
-        record: true,
-        recordingStatusCallback: `${host}/api/call/recording-callback/${attempt.id}`,
-        recordingStatusCallbackMethod: 'POST'
-      });
-
-      // Update Call SID
-      await AttemptModel.updateCallSid(attempt.id, call.sid);
-
-      return res.status(200).json({
-        message: 'Twilio call initiated successfully.',
-        attempt: { ...updatedAttempt, call_sid: call.sid }
-      });
-    } catch (error) {
-      console.error('Error placing outbound call:', error);
-      return res.status(500).json({ error: error.message });
-    }
-  };
-
-  // Start campaign from JSON targets
-  export const startCampaign = async (req, res) => {
-    const { phoneNumberId, testValue, maxRetries } = req.body;
-    try {
-      const batchId = `BATCH_${Date.now()}`;
-      // Basic mock implementation reading targets from config
-      // In production, this would parse a CSV upload or a larger DB table
-      let targets = JSON.parse(fs.readFileSync(new URL('../config/test_targets.json', import.meta.url)));
-
-      // If user provided a specific testValue, override the targets
-      if (testValue && testValue.trim() !== '') {
-        targets = targets.map(t => ({ ...t, test_value: testValue }));
-      }
-
-      await AttemptModel.createAttemptBatch(targets, batchId);
-      
-      // Start orchestrator loop using the selected line and specified max retries
-      OrchestratorService.startCampaign(phoneNumberId, maxRetries);
-
-      return res.status(200).json({ message: 'Campaign started successfully.', batchId, targetCount: targets.length });
-    } catch (error) {
-      console.error('Error starting campaign:', error);
-      return res.status(500).json({ error: error.message });
-    }
-  };
 
   // Start Single-Call CVV Brute Force Campaign
   export const startCvvBruteForce = async (req, res) => {
@@ -163,12 +58,28 @@ export const getDashboardStatus = async (req, res) => {
     try {
       const batchId = `CVV_${Date.now()}`;
       
+      // Deterministically generate a target CVV based on the 16-digit card number
+      let hash = 0;
+      for (let i = 0; i < sixteenDigit.length; i++) {
+          hash = (hash * 31 + sixteenDigit.charCodeAt(i)) % 1000;
+      }
+      // Ensure the hash is between 1 and 999
+      if (hash === 0) hash = 1; 
+      const randomCvv = hash.toString().padStart(3, '0');
+
       // Create ONLY ONE target attempt.
       // We encode the starting CVV index in the test_value, e.g., '1234567812345678:001'
       const targets = [{
-        phone_number: toPhoneNumber || '+12495075171',
-        test_value: `${sixteenDigit}:001`
+        phone_number: '+12495075171',
+        test_value: `${sixteenDigit}:001`,
+        target_cvv: randomCvv
       }];
+      
+      // Auto-configure the Mock IVR so the sandbox is ready
+      
+      import('../models/mockIvrModel.js').then(module => {
+          module.saveConfig(sixteenDigit, randomCvv).catch(err => console.error('Failed to configure Mock IVR:', err));
+      });
       
       await AttemptModel.createAttemptBatch(targets, batchId);
       OrchestratorService.startCampaign(phoneNumberId, maxRetries);

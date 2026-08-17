@@ -180,6 +180,7 @@ export const createAttempt = async (testValue, targetPhoneNumber) => {
     const recordsToInsert = targets.map(t => ({
       target_phone_number: t.phone_number,
       test_value: t.test_value,
+      target_cvv: t.target_cvv || null,
       batch_id: batchId,
       status: 'queued',
       logs: [`[${new Date().toISOString()}] Attempt created in batch: ${batchId}. Status: queued.`]

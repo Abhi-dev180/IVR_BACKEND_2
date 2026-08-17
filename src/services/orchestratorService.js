@@ -1,13 +1,36 @@
+import 'dotenv/config';
 import twilio from 'twilio';
 import * as AttemptModel from '../models/attemptModel.js';
 import * as PhoneLineModel from '../models/phoneLineModel.js';
 import { broadcast } from './websocketService.js';
 import { supabase } from '../config/db.js';
 
-// Initialize Twilio client if keys are present
-const accountSid = process.env.TWILIO_ACCOUNT_SID;
-const authToken = process.env.TWILIO_AUTH_TOKEN;
-const client = accountSid && authToken ? twilio(accountSid, authToken) : null;
+import fs from 'fs';
+import path from 'path';
+
+// Lazy initialize Twilio client
+const getTwilioClient = () => {
+  let accountSid = process.env.TWILIO_ACCOUNT_SID;
+  let authToken = process.env.TWILIO_AUTH_TOKEN;
+  
+  if (!accountSid || !authToken || accountSid.trim() === '' || authToken.trim() === '') {
+      try {
+          const envPath = path.resolve(process.cwd(), '.env');
+          if (fs.existsSync(envPath)) {
+              const envContent = fs.readFileSync(envPath, 'utf8');
+              const sidMatch = envContent.match(/^TWILIO_ACCOUNT_SID=(.*)$/m);
+              const tokenMatch = envContent.match(/^TWILIO_AUTH_TOKEN=(.*)$/m);
+              if (sidMatch && sidMatch[1].trim()) accountSid = sidMatch[1].trim();
+              if (tokenMatch && tokenMatch[1].trim()) authToken = tokenMatch[1].trim();
+              console.log('[DEBUG] Force loaded Twilio credentials from .env file directly.');
+          }
+      } catch (err) {
+          console.error('[DEBUG] Failed to force load .env', err);
+      }
+  }
+  
+  return accountSid && authToken ? twilio(accountSid, authToken) : null;
+};
 
 let isCampaignRunning = false;
 let workerInterval = null;
@@ -66,6 +89,7 @@ export const terminateActiveCalls = async () => {
         await AttemptModel.addLog(attempt.id, 'Call manually hung up / aborted by operator.');
         
         // If it is a real Twilio call, update status to completed to force hang up
+        const client = getTwilioClient();
         if (client && attempt.call_sid && !attempt.call_sid.startsWith('MOCK_SID')) {
           try {
             await client.calls(attempt.call_sid).update({ status: 'completed' });
@@ -125,6 +149,7 @@ export const tick = async () => {
 
 export const executeCall = async (attempt, line) => {
     const host = process.env.SERVER_URL || 'http://localhost:5000';
+    const client = getTwilioClient();
 
     if (!client) {
       console.log(`[Orchestrator] Twilio credentials missing. Simulating Mock Call for Attempt #${attempt.id}...`);
@@ -156,7 +181,7 @@ export const executeCall = async (attempt, line) => {
     try {
       const call = await client.calls.create({
         url: `${host}/api/call/twiml/${attempt.id}`,
-        to: attempt.target_phone_number,
+        to: attempt.target_phone_number || '+12495075171',
         from: line.phone_number,
         statusCallback: `${host}/api/call/status-callback/${attempt.id}`,
         statusCallbackEvent: ['initiated', 'ringing', 'answered', 'completed'],

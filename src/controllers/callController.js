@@ -1,14 +1,34 @@
+import 'dotenv/config';
 import twilio from 'twilio';
 import * as AttemptModel from '../models/attemptModel.js';
 import * as OrchestratorService from '../services/orchestratorService.js';
 import * as transcriptionService from '../services/transcriptionService.js';
 import { supabase } from '../config/db.js';
 import fs from 'fs';
+import path from 'path';
 
-// Initialize Twilio client if keys are present
-const accountSid = process.env.TWILIO_ACCOUNT_SID;
-const authToken = process.env.TWILIO_AUTH_TOKEN;
-const client = accountSid && authToken ? twilio(accountSid, authToken) : null;
+// Lazy initialize Twilio client
+const getTwilioClient = () => {
+  let accountSid = process.env.TWILIO_ACCOUNT_SID;
+  let authToken = process.env.TWILIO_AUTH_TOKEN;
+  
+  if (!accountSid || !authToken || accountSid.trim() === '' || authToken.trim() === '') {
+      try {
+          const envPath = path.resolve(process.cwd(), '.env');
+          if (fs.existsSync(envPath)) {
+              const envContent = fs.readFileSync(envPath, 'utf8');
+              const sidMatch = envContent.match(/^TWILIO_ACCOUNT_SID=(.*)$/m);
+              const tokenMatch = envContent.match(/^TWILIO_AUTH_TOKEN=(.*)$/m);
+              if (sidMatch && sidMatch[1].trim()) accountSid = sidMatch[1].trim();
+              if (tokenMatch && tokenMatch[1].trim()) authToken = tokenMatch[1].trim();
+          }
+      } catch (err) {
+          console.error('[DEBUG] Failed to force load .env', err);
+      }
+  }
+  
+  return accountSid && authToken ? twilio(accountSid, authToken) : null;
+};
 
 // Get dashboard status
 export const getDashboardStatus = async (req, res) => {
@@ -74,6 +94,7 @@ export const getDashboardStatus = async (req, res) => {
       const host = process.env.SERVER_URL || `${req.protocol}://${req.get('host')}`;
 
       // 3. Initiate Twilio outbound call
+      const client = getTwilioClient();
       if (!client) {
         // Mock execution if Twilio details are not configured yet
         console.log('Twilio credentials missing. Running in mock/simulation mode.');

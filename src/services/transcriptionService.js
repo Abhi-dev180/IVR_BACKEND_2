@@ -96,15 +96,39 @@ if (!fs.existsSync(AUDIO_DIR)) {
   export const downloadFile = (url, destPath) => {
     return new Promise((resolve, reject) => {
       const file = fs.createWriteStream(destPath);
-      https.get(url, (response) => {
-        if (response.statusCode !== 200) {
+      
+      const accountSid = process.env.TWILIO_ACCOUNT_SID;
+      const authToken = process.env.TWILIO_AUTH_TOKEN;
+      const auth = Buffer.from(`${accountSid}:${authToken}`).toString('base64');
+      
+      const options = {
+        headers: {
+            'Authorization': `Basic ${auth}`
+        }
+      };
+      
+      https.get(url, options, (response) => {
+        if (response.statusCode === 302) {
+          // Follow redirect if Twilio redirects to S3
+          https.get(response.headers.location, (redirectResponse) => {
+             if (redirectResponse.statusCode !== 200) {
+               reject(new Error(`Failed to download file after redirect. HTTP Status: ${redirectResponse.statusCode}`));
+               return;
+             }
+             pipeline(redirectResponse, file, (err) => {
+               if (err) reject(err);
+               else resolve();
+             });
+          }).on('error', reject);
+        } else if (response.statusCode !== 200) {
           reject(new Error(`Failed to download file. HTTP Status: ${response.statusCode}`));
           return;
+        } else {
+            pipeline(response, file, (err) => {
+            if (err) reject(err);
+            else resolve();
+            });
         }
-        pipeline(response, file, (err) => {
-          if (err) reject(err);
-          else resolve();
-        });
       }).on('error', reject);
     });
   };

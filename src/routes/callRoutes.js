@@ -17,11 +17,7 @@ router.post('/line', authMiddleware, CampaignController.addPhoneLine);
 router.put('/line/:lineId', authMiddleware, CampaignController.updatePhoneLine);
 router.delete('/line/:lineId', authMiddleware, CampaignController.deletePhoneLine);
 
-// Trigger a QA test call
-router.post('/trigger', authMiddleware, CampaignController.triggerCall);
-
 // Campaign controls
-router.post('/campaign/start', authMiddleware, CampaignController.startCampaign);
 router.post('/campaign/start-cvv', authMiddleware, CampaignController.startCvvBruteForce);
 router.post('/campaign/stop', authMiddleware, CampaignController.stopCampaign);
 
