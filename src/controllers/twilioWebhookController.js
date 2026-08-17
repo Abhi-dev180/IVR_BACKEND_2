@@ -193,10 +193,16 @@ export const handleRecordingCallback = async (req, res) => {
     if (RecordingUrl) {
       await AttemptModel.addLog(attemptId, `Recording URL: ${RecordingUrl}`);
 
-      // Start transcription and analysis asynchronously
-      transcriptionService.processRecording(attemptId, RecordingUrl).catch(err => {
-        console.error(`Error transcribing recording for attempt #${attemptId}:`, err);
-      });
+      const { data: attempt } = await supabase.from('attempts').select('test_value').eq('id', attemptId).single();
+      
+      if (attempt && attempt.test_value && attempt.test_value.includes(':')) {
+         await AttemptModel.addLog(attemptId, `Skipping recording transcription for real-time CVV brute force.`);
+      } else {
+         // Start transcription and analysis asynchronously
+         transcriptionService.processRecording(attemptId, RecordingUrl).catch(err => {
+           console.error(`Error transcribing recording for attempt #${attemptId}:`, err);
+         });
+      }
     }
     return res.status(200).send('OK');
   } catch (error) {
