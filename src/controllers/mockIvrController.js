@@ -93,6 +93,7 @@ export const handleGatherCvv = async (req, res) => {
             method: 'POST',
             timeout: 10
         });
+        gather.pause({ length: 1 });
         gather.say('Invalid CVV. Please try again.');
         twiml.say('We didn\'t receive any input. Goodbye!');
         twiml.hangup();

