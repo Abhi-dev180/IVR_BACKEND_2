@@ -118,7 +118,7 @@ export const handleInteractiveListen = async (req, res) => {
         twiml.hangup();
     } 
     // Check for failure condition
-    else if (transcript.includes('invalid cvv') || transcript.includes('try again') || transcript.includes('wrong')) {
+    else if (transcript.includes('invalid cvv') || transcript.includes('try again') || transcript.includes('wrong') || transcript.includes('incorrect')) {
         const nextCvvNum = parseInt(currentCvv) + 1;
         
         if (nextCvvNum > 999) {
