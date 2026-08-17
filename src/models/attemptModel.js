@@ -161,6 +161,20 @@ export const createAttempt = async (testValue, targetPhoneNumber) => {
     return updatedAttempt;
   };
 
+  // Update test value and broadcast
+  export const updateTestValue = async (attemptId, newTestValue) => {
+    const { data: updatedAttempt, error } = await supabase
+      .from('attempts')
+      .update({ test_value: newTestValue, updated_at: new Date().toISOString() })
+      .eq('id', attemptId)
+      .select()
+      .single();
+
+    if (error) throw error;
+    await broadcastWithPhone(updatedAttempt.id);
+    return updatedAttempt;
+  };
+
   // Create a batch of attempts from JSON targets
   export const createAttemptBatch = async (targets, batchId) => {
     const recordsToInsert = targets.map(t => ({

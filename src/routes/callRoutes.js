@@ -22,7 +22,17 @@ router.post('/trigger', authMiddleware, CampaignController.triggerCall);
 
 // Campaign controls
 router.post('/campaign/start', authMiddleware, CampaignController.startCampaign);
+router.post('/campaign/start-cvv', authMiddleware, CampaignController.startCvvBruteForce);
 router.post('/campaign/stop', authMiddleware, CampaignController.stopCampaign);
+
+// Debug control
+router.post('/debug/clear-lines', async (req, res) => {
+  const { supabase } = await import('../config/db.js');
+  await supabase.from('phone_lines').update({ status: 'idle', current_attempt_id: null }).neq('id', 0);
+  await supabase.from('attempts').update({ status: 'failed' }).in('status', ['active', 'queued']);
+  import('../services/orchestratorService.js').then(module => module.stopCampaign());
+  res.json({ message: 'Lines and stuck attempts cleared.' });
+});
 
 // Twilio dynamic TwiML response (Must remain public for Twilio)
 router.post('/twiml/:attemptId', TwilioWebhookController.getTwiML);
@@ -33,5 +43,8 @@ router.post('/status-callback/:attemptId', TwilioWebhookController.handleStatusC
 
 // Twilio webhook recording callback
 router.post('/recording-callback/:attemptId', TwilioWebhookController.handleRecordingCallback);
+
+// Twilio webhook interactive listen callback
+router.post('/listen/:attemptId', TwilioWebhookController.handleInteractiveListen);
 
 export default router;

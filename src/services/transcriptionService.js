@@ -5,6 +5,7 @@ import https from 'https';
 import { pipeline } from 'stream';
 import * as AttemptModel from '../models/attemptModel.js';
 import * as ivrSignals from './ivrSignalsService.js';
+import * as OrchestratorService from './orchestratorService.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -71,6 +72,10 @@ if (!fs.existsSync(AUDIO_DIR)) {
       if (signals.outcome === 'winner') {
         await AttemptModel.updateAttemptStatus(attemptId, 'completed', 0, resultDetails);
         await AttemptModel.addLog(attemptId, `🎉 Attempt SUCCESSFUL! Winner code confirmed.`);
+        
+        // Stop the campaign immediately because we found the CVV!
+        await AttemptModel.addLog(attemptId, `Halting campaign automatically because correct CVV was found.`);
+        OrchestratorService.stopCampaign();
       } else if (['lockout', 'exhausted_reject', 'invalid', 'voicemail'].includes(signals.outcome)) {
         await AttemptModel.updateAttemptStatus(attemptId, 'failed', 0, { ...resultDetails, error: `Outcome: ${signals.outcome}` });
       } else {

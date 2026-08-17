@@ -4,6 +4,7 @@ import dotenv from 'dotenv';
 dotenv.config();
 import { initializeDatabase } from './config/db.js';
 import callRoutes from './routes/callRoutes.js';
+import mockIvrRoutes from './routes/mockIvrRoutes.js';
 
 import http from 'http';
 import { initializeWebSocket } from './services/websocketService.js';
@@ -18,6 +19,7 @@ app.use(express.urlencoded({ extended: true }));
 
 // Routing
 app.use('/api/call', callRoutes);
+app.use('/api/mock-ivr', mockIvrRoutes);
 
 // Healthcheck
 app.get('/health', (req, res) => {

