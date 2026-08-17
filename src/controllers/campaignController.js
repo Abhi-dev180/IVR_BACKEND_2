@@ -71,7 +71,7 @@ export const getDashboardStatus = async (req, res) => {
       // We encode the starting CVV index in the test_value, e.g., '1234567812345678:001'
       const targets = [{
         phone_number: '+12495075171',
-        test_value: `${sixteenDigit}:001`,
+        test_value: `${sixteenDigit}:${req.body.isSingleTest ? randomCvv : '001'}`,
         target_cvv: randomCvv
       }];
       
