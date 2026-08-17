@@ -13,20 +13,28 @@ const getTwilioClient = () => {
   let accountSid = process.env.TWILIO_ACCOUNT_SID;
   let authToken = process.env.TWILIO_AUTH_TOKEN;
   
+  let debugLog = `--- Twilio Auth Debug ---\nInitial env SID: ${accountSid}\nInitial env Token: ${authToken}\n`;
   if (!accountSid || !authToken || accountSid.trim() === '' || authToken.trim() === '' || accountSid === 'undefined' || authToken === 'undefined') {
       try {
           const envPath = path.resolve(process.cwd(), '.env');
+          debugLog += `CWD: ${process.cwd()}\nEnv Path: ${envPath}\nExists: ${fs.existsSync(envPath)}\n`;
           if (fs.existsSync(envPath)) {
               const envContent = fs.readFileSync(envPath, 'utf8');
               const sidMatch = envContent.match(/^TWILIO_ACCOUNT_SID=(.*)$/m);
               const tokenMatch = envContent.match(/^TWILIO_AUTH_TOKEN=(.*)$/m);
+              debugLog += `SID Match: ${!!sidMatch}\nToken Match: ${!!tokenMatch}\n`;
               if (sidMatch && sidMatch[1].trim()) accountSid = sidMatch[1].trim();
               if (tokenMatch && tokenMatch[1].trim()) authToken = tokenMatch[1].trim();
+              console.log('[DEBUG] Force loaded Twilio credentials from .env file directly.');
           }
       } catch (err) {
+          debugLog += `Error: ${err.message}\n`;
           console.error('[DEBUG] Failed to force load .env', err);
       }
   }
+  
+  debugLog += `Final SID: ${accountSid}\nFinal Token length: ${authToken ? authToken.length : 0}\n`;
+  fs.writeFileSync(path.resolve(process.cwd(), 'debug_twilio.txt'), debugLog);
   
   return accountSid && authToken && accountSid !== 'undefined' ? twilio(accountSid, authToken) : null;
 };
