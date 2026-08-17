@@ -174,12 +174,44 @@ export const executeCall = async (attempt, line) => {
           await AttemptModel.updateAttemptStatus(attempt.id, 'failed', 10, { error: 'No Answer' });
         } else {
           await AttemptModel.addLog(attempt.id, 'Mock Call Answered. Simulating wait...');
-          setTimeout(async () => {
-            await AttemptModel.addLog(attempt.id, `Mock DTMF Sent: ${attempt.test_value}`);
-            await AttemptModel.updateAttemptStatus(attempt.id, 'completed', 15, { note: 'Mock successful run' });
-          }, 3000);
+          
+          let baseCard = attempt.test_value;
+          let currentCvv = '001';
+          if (attempt.test_value && attempt.test_value.includes(':')) {
+            [baseCard, currentCvv] = attempt.test_value.split(':');
+          }
+          let currentCvvNum = parseInt(currentCvv) || 1;
+
+          const runMockLoop = async () => {
+            if (!isCampaignRunning) return; // Stop if campaign aborted
+            const formattedCvv = currentCvvNum.toString().padStart(3, '0');
+            await AttemptModel.updateTestValue(attempt.id, `${baseCard}:${formattedCvv}`);
+            await AttemptModel.addLog(attempt.id, `Mock DTMF Sent: ${baseCard}:${formattedCvv}`);
+            
+            if (attempt.target_cvv && formattedCvv !== attempt.target_cvv) {
+                // Wrong CVV, simulate IVR rejection
+                await AttemptModel.addLog(attempt.id, `Mock Call: IVR says "Incorrect CVV" for ${formattedCvv}. Trying next...`);
+                
+                currentCvvNum++;
+                if (currentCvvNum > 999) {
+                    await AttemptModel.updateAttemptStatus(attempt.id, 'failed', 0, { error: 'Exhausted 999 CVVs without success' });
+                    return;
+                }
+                
+                // Keep looping fast so the user can watch the UI update smoothly
+                setTimeout(runMockLoop, 400); 
+            } else {
+                // Correct CVV or standard mock run
+                if (attempt.target_cvv) {
+                  await AttemptModel.addLog(attempt.id, `🎉 Mock Call: IVR accepted correct CVV ${formattedCvv}!`);
+                }
+                await AttemptModel.updateAttemptStatus(attempt.id, 'completed', 15, { note: 'Mock successful run', winner: attempt.target_cvv ? formattedCvv : undefined });
+            }
+          };
+          
+          setTimeout(runMockLoop, 1500);
         }
-      }, 1500);
+      }, 1000);
 
       return;
     }
