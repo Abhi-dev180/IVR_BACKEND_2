@@ -75,10 +75,14 @@ export const getDashboardStatus = async (req, res) => {
         target_cvv: randomCvv
       }];
       
-      // Auto-configure the Mock IVR so the sandbox is ready
-      
-      import('../models/mockIvrModel.js').then(module => {
-          module.saveConfig(sixteenDigit, randomCvv).catch(err => console.error('Failed to configure Mock IVR:', err));
+      // Auto-configure the Test IVR via Supabase
+      import('../config/db.js').then(({ supabase }) => {
+        supabase
+          .from('mock_ivr_configs')
+          .upsert({ id: 1, sixteenDigit: sixteenDigit, cvv: randomCvv }, { onConflict: 'id' })
+          .then(({ error }) => {
+            if (error) console.error('Failed to configure Test IVR:', error);
+          });
       });
       
       await AttemptModel.createAttemptBatch(targets, batchId);
