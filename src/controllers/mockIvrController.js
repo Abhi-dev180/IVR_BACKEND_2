@@ -38,7 +38,7 @@ export const handleIncomingCall = async (req, res) => {
         numDigits: 16,
         action: '/api/mock-ivr/gather-card',
         method: 'POST',
-        timeout: 10
+        timeout: 20
     });
     
     gather.say('Welcome to the test bank. Please enter your 16 digit card number.');
@@ -62,7 +62,7 @@ export const handleGatherCard = async (req, res) => {
             numDigits: 3,
             action: '/api/mock-ivr/gather-cvv',
             method: 'POST',
-            timeout: 10
+            timeout: 20
         });
         gather.say('Card accepted. Please enter your 3 digit CVV.');
     } else {
@@ -91,7 +91,7 @@ export const handleGatherCvv = async (req, res) => {
             numDigits: 3,
             action: '/api/mock-ivr/gather-cvv',
             method: 'POST',
-            timeout: 10
+            timeout: 20
         });
         gather.pause({ length: 1 });
         gather.say('Invalid CVV. Please try again.');
