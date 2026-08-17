@@ -43,14 +43,18 @@ if (!fs.existsSync(AUDIO_DIR)) {
         transcript = await transcribeLocalWhisperServer(localFilePath, whisperServer);
       } else {
         await AttemptModel.addLog(attemptId, 'No transcription service configured. Simulating mock transcription.');
-        // Generate a mock transcript matching the 16-digit verification bot dialog
+        // Fetch the attempt to get the exact 16 digit card number they entered
+        const { supabase } = await import('../config/db.js');
+        const { data: attempt } = await supabase.from('attempts').select('test_value').eq('id', attemptId).single();
+        const baseCard = attempt && attempt.test_value ? attempt.test_value.split(':')[0] : '1234567890123456';
+        
         const rand = Math.random();
         if (rand < 0.70) {
-          transcript = "please enter your card number. thank you, enter or say the four digit expiry date.";
+          transcript = `IVR: Please enter 16 digit DTMF number\nUser: ${baseCard}\nIVR: Thank you, enter or say the four digit expiry date.`;
         } else if (rand < 0.90) {
-          transcript = "please enter your card number. you have entered an invalid three digit security code.";
+          transcript = `IVR: Please enter 16 digit DTMF number\nUser: ${baseCard}\nIVR: You have entered an invalid three digit security code.`;
         } else {
-          transcript = "please call us back"; // Lockout
+          transcript = `IVR: Please enter 16 digit DTMF number\nUser: ${baseCard}\nIVR: Too many attempts. Please call us back.`; // Lockout
         }
       }
 
