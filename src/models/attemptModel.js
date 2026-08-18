@@ -135,6 +135,7 @@ export const createAttempt = async (testValue, targetPhoneNumber) => {
 
   // Add a log message to an attempt
   export const addLog = async (attemptId, logMessage) => {
+    console.log(`[Attempt #${attemptId}] ${logMessage}`);
     const formattedLog = `[${new Date().toISOString()}] ${logMessage}`;
 
     const { data: attempt, error: fetchErr } = await supabase
@@ -165,6 +166,7 @@ export const createAttempt = async (testValue, targetPhoneNumber) => {
   export const addLogs = async (attemptId, logMessagesArray) => {
     if (!logMessagesArray || logMessagesArray.length === 0) return null;
     
+    logMessagesArray.forEach(msg => console.log(`[Attempt #${attemptId}] ${msg}`));
     const formattedLogs = logMessagesArray.map(msg => `[${new Date().toISOString()}] ${msg}`);
 
     const { data: attempt, error: fetchErr } = await supabase

