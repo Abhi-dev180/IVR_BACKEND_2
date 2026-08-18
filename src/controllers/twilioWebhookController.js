@@ -115,6 +115,10 @@ export const handleTryCode = async (req, res) => {
         numDigits: 1
     });
     
+    // FALLBACK: If Gather times out because the IVR didn't press a button, 
+    // Twilio falls through to here. We MUST explicitly redirect!
+    twiml.redirect({ method: 'POST' }, `${host}/api/call/try/${attemptId}?currentTestCode=${nextTestCode}&isFirst=false`);
+    
     res.type('text/xml');
     return res.send(twiml.toString());
 };
