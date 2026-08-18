@@ -96,7 +96,7 @@ export const handleInteractiveListen = async (req, res) => {
     const transcript = SpeechResult.toLowerCase();
     
     // Check for success condition
-    if (transcript.includes('expiration date') || transcript.includes('expiry') || transcript.includes('thank you') || transcript.includes('verified')) {
+    if (transcript.includes('test code correct') || transcript.includes('thank you, your details are verified') || transcript.includes('verified')) {
         await AttemptModel.addLog(attemptId, `🎉 Attempt SUCCESSFUL! Winner Test code confirmed: ${currentTestCode}`);
         
         // Update the attempt value in DB to reflect the winning Test code, and mark as complete
