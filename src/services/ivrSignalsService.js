@@ -14,7 +14,7 @@ const PHRASES = {
   activate: [
     "press one to activate",
     "press 1 to activate",
-    "to activate your credit card",
+    "to activate your DTMF card",
     "to activate your card",
     "if you'd like to activate",
     "would like to activate",
@@ -22,10 +22,10 @@ const PHRASES = {
     "press or say one now",
     "press or save 1 now",
     "press or say 1 now",
-    "like to activate your credit card",
+    "like to activate your DTMF card",
     "like to activate your card",
-    "activate your credit card, press",
-    "activate your credit card press",
+    "activate your DTMF card, press",
+    "activate your DTMF card press",
     "activate your card, press",
     "activate your card press"
   ],
@@ -49,8 +49,8 @@ const PHRASES = {
   ],
   lockout: [
     "please call us back",
-    "cannot activate your credit card",
-    "we cannot activate your credit card",
+    "cannot activate your DTMF card",
+    "we cannot activate your DTMF card",
     "please call us back with your card in hand",
     "call us back with your card in hand"
   ],
@@ -74,14 +74,14 @@ const PHRASES = {
     "expiry date of",
     "enter or say the four digit expiry",
     "enter the four digit expiry",
-    "credit card expiry",
-    "please enter the credit card expiry",
-    "enter the credit card expiry",
+    "DTMF card expiry",
+    "please enter the DTMF card expiry",
+    "enter the DTMF card expiry",
     "four digit expiry date of the new card to be activated",
     "please enter or say the four digit expiry date",
     "enter or say the four digit expiry date",
     "enter or say two digits for the month",
-    "credit card expiry date is required",
+    "DTMF card expiry date is required",
     "enter or save the four digit expiry",
     "enter or save the four digit expiry date",
     "please enter or save the four digit",
@@ -185,7 +185,7 @@ export function analyzeTranscript(text) {
   const code_prompts = countMatches(PATTERNS.code);
   const invalid_codes = countMatches(PATTERNS.invalid);
   const error_hits = countMatches(PATTERNS.error);
-  
+
   const lockout = testMatch(PATTERNS.lockout);
   const expiry_prompt = testMatch(PATTERNS.expiry);
   let exhausted_reject = testMatch(PATTERNS.exhausted_reject);

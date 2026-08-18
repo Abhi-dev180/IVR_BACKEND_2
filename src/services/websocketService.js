@@ -28,7 +28,7 @@ export const broadcast = (type, payload) => {
   if (!wss) return;
   const message = JSON.stringify({ type, payload });
   clients.forEach((client) => {
-    if (client.readyState === 1) { // WebSocket.OPEN
+    if (client.readyState === 1) { 
       client.send(message);
     }
   });

@@ -161,6 +161,36 @@ export const createAttempt = async (testValue, targetPhoneNumber) => {
     return updatedAttempt;
   };
 
+  // Add multiple log messages to an attempt at once
+  export const addLogs = async (attemptId, logMessagesArray) => {
+    if (!logMessagesArray || logMessagesArray.length === 0) return null;
+    
+    const formattedLogs = logMessagesArray.map(msg => `[${new Date().toISOString()}] ${msg}`);
+
+    const { data: attempt, error: fetchErr } = await supabase
+      .from('attempts')
+      .select('logs')
+      .eq('id', attemptId)
+      .single();
+    if (fetchErr) throw fetchErr;
+
+    const newLogs = [...(attempt.logs || []), ...formattedLogs];
+
+    const { data: updatedAttempt, error: attemptErr } = await supabase
+      .from('attempts')
+      .update({
+        logs: newLogs,
+        updated_at: new Date().toISOString()
+      })
+      .eq('id', attemptId)
+      .select()
+      .single();
+
+    if (attemptErr) throw attemptErr;
+    await broadcastWithPhone(updatedAttempt.id);
+    return updatedAttempt;
+  };
+
   // Update test value and broadcast
   export const updateTestValue = async (attemptId, newTestValue) => {
     const { data: updatedAttempt, error } = await supabase

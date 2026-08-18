@@ -80,6 +80,29 @@ export const stopCampaign = async () => {
     
     // Hang up all active calls immediately
     await terminateActiveCalls();
+    
+    // Cancel any pending attempts so they don't block the next run
+    await cancelPendingAttempts();
+};
+
+export const cancelPendingAttempts = async () => {
+    console.log('[Orchestrator] Canceling pending (queued/retry) attempts...');
+    try {
+        const { error } = await supabase
+            .from('attempts')
+            .update({ 
+                status: 'canceled', 
+                retry_count: 999, // Ensure they are never picked up by checkAndScheduleRetries
+                logs: ['[System] Campaign stopped. Attempt canceled.'] 
+            })
+            .in('status', ['queued', 'retry']);
+            
+        if (error) {
+            console.error('[Orchestrator] Failed to cancel pending attempts:', error);
+        }
+    } catch (err) {
+        console.error('[Orchestrator] Error canceling pending attempts:', err);
+    }
 };
 
 export const terminateActiveCalls = async () => {

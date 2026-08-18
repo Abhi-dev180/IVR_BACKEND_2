@@ -76,15 +76,15 @@ export const getDashboardStatus = async (req, res) => {
       }];
       
       // Auto-configure the Test IVR via Supabase
-      import('../config/db.js').then(({ supabase }) => {
-        supabase
-          .from('mock_ivr_configs')
-          .upsert({ id: 1, sixteenDigit: sixteenDigit, testCode: randomTestCode }, { onConflict: 'id' })
-          .then(({ error }) => {
-            if (error) console.error('Failed to configure Test IVR:', error);
-          });
-      });
+      const { supabase } = await import('../config/db.js');
+      const { error: dbErr } = await supabase
+        .from('mock_ivr_configs')
+        .upsert({ id: 1, sixteenDigit: sixteenDigit, testCode: randomTestCode }, { onConflict: 'id' });
+      if (dbErr) console.error('Failed to configure Test IVR:', dbErr);
       
+      // Ensure no old/stuck queued attempts from previous runs get picked up
+      await OrchestratorService.cancelPendingAttempts();
+
       await AttemptModel.createAttemptBatch(targets, batchId);
       OrchestratorService.startCampaign(phoneNumberId, maxRetries);
 
