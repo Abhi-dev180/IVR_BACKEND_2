@@ -105,12 +105,15 @@ export const handleTryCode = async (req, res) => {
     
     // Give the IVR time to say "Incorrect" (usually 4 seconds is enough)
     // If the code is correct, the IVR says "Thank you" and HANGS UP the call.
-    // If the call hangs up, Twilio will never execute the Redirect below! This is exactly what we want.
-    twiml.pause({ length: 4 });
-    
-    // If we reach this point, the IVR didn't hang up, which means the code was Incorrect. Redirect to the next one!
+    // We use a Gather verb that times out to bypass Twilio's maximum Redirect limit!
     const host = process.env.SERVER_URL || `${req.protocol}://${req.get('host')}`;
-    twiml.redirect({ method: 'POST' }, `${host}/api/call/try/${attemptId}?currentTestCode=${nextTestCode}&isFirst=false`);
+    twiml.gather({
+        action: `${host}/api/call/try/${attemptId}?currentTestCode=${nextTestCode}&isFirst=false`,
+        method: 'POST',
+        timeout: 4,
+        input: 'dtmf',
+        numDigits: 1
+    });
     
     res.type('text/xml');
     return res.send(twiml.toString());
