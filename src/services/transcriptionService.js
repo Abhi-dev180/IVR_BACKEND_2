@@ -54,10 +54,9 @@ if (!fs.existsSync(AUDIO_DIR)) {
         let mockTranscript = `IVR: Welcome to the test bank. Please enter your 16 digit card number.\nUser: ${baseCard}\nIVR: Card accepted. Please enter your 3 digit Test code.\n`;
         
         // Simulate the brute-force attempts. 
-        // We'll simulate from a few attempts prior, up to the target, to show the back-and-forth flow.
+        // We'll simulate from 001 up to the target
         const target = parseInt(targetTestCode);
-        const maxLines = Math.min(target, 4); // Show up to 4 previous guesses to keep logs readable
-        const start = Math.max(1, target - maxLines + 1);
+        const start = 1;
         
         for (let i = start; i <= target; i++) {
             const codeStr = i.toString().padStart(3, '0');
