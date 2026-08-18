@@ -102,8 +102,8 @@ export const handleTryCode = async (req, res) => {
         } else {
             batchLogs.push(`IVR says "Incorrect Test Code" for ${codeStr}. Trying next...`);
             batchLogs.push(`DTMF Sent: ${baseCard}:${codeStr}`);
-            // Wait 0.5 seconds (1 'w') to let IVR speak before playing next
-            twiml.play({ digits: `w${codeStr}` });
+            // Wait 1.0 seconds (2 'w's) to let IVR process the webhook before playing next
+            twiml.play({ digits: `ww${codeStr}` });
         }
     }
     
