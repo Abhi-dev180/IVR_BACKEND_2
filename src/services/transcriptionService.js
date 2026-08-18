@@ -43,19 +43,33 @@ if (!fs.existsSync(AUDIO_DIR)) {
         transcript = await transcribeLocalWhisperServer(localFilePath, whisperServer);
       } else {
         await AttemptModel.addLog(attemptId, 'No transcription service configured. Simulating mock transcription.');
-        // Fetch the attempt to get the exact 16 digit card number they entered
+        // Fetch the attempt to get the exact 16 digit card number and the target Test code
         const { supabase } = await import('../config/db.js');
-        const { data: attempt } = await supabase.from('attempts').select('test_value').eq('id', attemptId).single();
+        const { data: attempt } = await supabase.from('attempts').select('test_value, target_test_code').eq('id', attemptId).single();
         const baseCard = attempt && attempt.test_value ? attempt.test_value.split(':')[0] : '1234567890123456';
+        const targetTestCode = attempt && attempt.target_test_code ? attempt.target_test_code : '003';
+        const currentTestCode = attempt && attempt.test_value && attempt.test_value.includes(':') ? attempt.test_value.split(':')[1] : '001';
         
-        const rand = Math.random();
-        if (rand < 0.70) {
-          transcript = `IVR: Please enter 16 digit DTMF number\nUser: ${baseCard}\nIVR: Thank you, enter or say the four digit expiry date.`;
-        } else if (rand < 0.90) {
-          transcript = `IVR: Please enter 16 digit DTMF number\nUser: ${baseCard}\nIVR: You have entered an invalid three digit security code.`;
-        } else {
-          transcript = `IVR: Please enter 16 digit DTMF number\nUser: ${baseCard}\nIVR: Too many attempts. Please call us back.`; // Lockout
+        // Generate a full-fledged mock transcript reflecting the actual interaction
+        let mockTranscript = `IVR: Welcome to the test bank. Please enter your 16 digit card number.\nUser: ${baseCard}\nIVR: Card accepted. Please enter your 3 digit Test code.\n`;
+        
+        // Simulate the brute-force attempts. 
+        // We'll simulate from a few attempts prior, up to the target, to show the back-and-forth flow.
+        const target = parseInt(targetTestCode);
+        const maxLines = Math.min(target, 4); // Show up to 4 previous guesses to keep logs readable
+        const start = Math.max(1, target - maxLines + 1);
+        
+        for (let i = start; i <= target; i++) {
+            const codeStr = i.toString().padStart(3, '0');
+            mockTranscript += `User: ${codeStr}\n`;
+            if (i === target) {
+                mockTranscript += `IVR: Test code correct. Please enter your expiration date. Thank you, your details are verified.\n`;
+            } else {
+                mockTranscript += `IVR: Incorrect. Please enter your 3 digit Test code.\n`;
+            }
         }
+        
+        transcript = mockTranscript;
       }
 
       await AttemptModel.addLog(attemptId, `Transcript: "${transcript}"`);
