@@ -40,7 +40,10 @@ router.post('/status-callback/:attemptId', TwilioWebhookController.handleStatusC
 // Twilio webhook recording callback
 router.post('/recording-callback/:attemptId', TwilioWebhookController.handleRecordingCallback);
 
-// Twilio webhook interactive listen callback
+// Twilio webhook interactive listen callback (DEPRECATED)
 router.post('/listen/:attemptId', TwilioWebhookController.handleInteractiveListen);
+
+// Twilio webhook continuous try loop
+router.post('/try/:attemptId', TwilioWebhookController.handleTryCode);
 
 export default router;

