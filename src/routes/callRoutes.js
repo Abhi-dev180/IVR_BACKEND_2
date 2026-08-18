@@ -18,7 +18,7 @@ router.put('/line/:lineId', authMiddleware, CampaignController.updatePhoneLine);
 router.delete('/line/:lineId', authMiddleware, CampaignController.deletePhoneLine);
 
 // Campaign controls
-router.post('/campaign/start-cvv', authMiddleware, CampaignController.startCvvBruteForce);
+router.post('/campaign/start-test-code', authMiddleware, CampaignController.startTestCodeBruteForce);
 router.post('/campaign/stop', authMiddleware, CampaignController.stopCampaign);
 
 // Debug control

@@ -77,8 +77,8 @@ if (!fs.existsSync(AUDIO_DIR)) {
         await AttemptModel.updateAttemptStatus(attemptId, 'completed', 0, resultDetails);
         await AttemptModel.addLog(attemptId, `🎉 Attempt SUCCESSFUL! Winner code confirmed.`);
         
-        // Stop the campaign immediately because we found the CVV!
-        await AttemptModel.addLog(attemptId, `Halting campaign automatically because correct CVV was found.`);
+        // Stop the campaign immediately because we found the Test code!
+        await AttemptModel.addLog(attemptId, `Halting campaign automatically because correct Test code was found.`);
         OrchestratorService.stopCampaign();
       } else if (['lockout', 'exhausted_reject', 'invalid', 'voicemail'].includes(signals.outcome)) {
         await AttemptModel.updateAttemptStatus(attemptId, 'failed', 0, { ...resultDetails, error: `Outcome: ${signals.outcome}` });

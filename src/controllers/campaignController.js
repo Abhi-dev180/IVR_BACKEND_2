@@ -52,34 +52,34 @@ export const getDashboardStatus = async (req, res) => {
 
 
 
-  // Start Single-Call CVV Brute Force Campaign
-  export const startCvvBruteForce = async (req, res) => {
+  // Start Single-Call Test code Brute Force Campaign
+  export const startTestCodeBruteForce = async (req, res) => {
     const { phoneNumberId, sixteenDigit, toPhoneNumber, maxRetries } = req.body;
     try {
-      const batchId = `CVV_${Date.now()}`;
+      const batchId = `Test code_${Date.now()}`;
       
-      // Deterministically generate a target CVV based on the 16-digit card number
+      // Deterministically generate a target Test code based on the 16-digit card number
       let hash = 0;
       for (let i = 0; i < sixteenDigit.length; i++) {
           hash = (hash * 31 + sixteenDigit.charCodeAt(i)) % 1000;
       }
       // Ensure the hash is between 1 and 999
       if (hash === 0) hash = 1; 
-      const randomCvv = hash.toString().padStart(3, '0');
+      const randomTestCode = hash.toString().padStart(3, '0');
 
       // Create ONLY ONE target attempt.
-      // We encode the starting CVV index in the test_value, e.g., '1234567812345678:001'
+      // We encode the starting Test code index in the test_value, e.g., '1234567812345678:001'
       const targets = [{
         phone_number: '+12495075171',
         test_value: `${sixteenDigit}:001`,
-        target_cvv: randomCvv
+        target_test_code: randomTestCode
       }];
       
       // Auto-configure the Test IVR via Supabase
       import('../config/db.js').then(({ supabase }) => {
         supabase
           .from('mock_ivr_configs')
-          .upsert({ id: 1, sixteenDigit: sixteenDigit, cvv: randomCvv }, { onConflict: 'id' })
+          .upsert({ id: 1, sixteenDigit: sixteenDigit, testCode: randomTestCode }, { onConflict: 'id' })
           .then(({ error }) => {
             if (error) console.error('Failed to configure Test IVR:', error);
           });
@@ -88,9 +88,9 @@ export const getDashboardStatus = async (req, res) => {
       await AttemptModel.createAttemptBatch(targets, batchId);
       OrchestratorService.startCampaign(phoneNumberId, maxRetries);
 
-      return res.status(200).json({ message: 'Single-Call CVV Brute Force Campaign started.', batchId, targetCount: targets.length });
+      return res.status(200).json({ message: 'Single-Call Test code Brute Force Campaign started.', batchId, targetCount: targets.length });
     } catch (error) {
-      console.error('Error starting CVV campaign:', error);
+      console.error('Error starting Test code campaign:', error);
       return res.status(500).json({ error: error.message });
     }
   };

