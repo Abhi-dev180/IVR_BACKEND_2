@@ -32,7 +32,7 @@ export const getTwiML = async (req, res) => {
         
         // Use Twilio's Redirect verb to jump to our loop handler
         const host = process.env.SERVER_URL || `${req.protocol}://${req.get('host')}`;
-        twiml.redirect({ method: 'POST' }, `${host}/api/call/try/${attemptId}?currentTestCode=${testCode}`);
+        twiml.redirect({ method: 'POST' }, `${host}/api/call/try/${attemptId}?currentTestCode=${testCode}&isFirst=true`);
         
     } else {
         // Standard non-Test code test run
