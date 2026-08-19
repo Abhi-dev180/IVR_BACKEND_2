@@ -299,7 +299,7 @@ export const createAttempt = async (testValue, targetPhoneNumber) => {
       .update({
         status: status,
         duration: duration,
-        result_details: resultDetails,
+        result_details: { ...(attempt.result_details || {}), ...resultDetails },
         updated_at: new Date().toISOString(),
         logs: newLogs
       })
@@ -309,8 +309,8 @@ export const createAttempt = async (testValue, targetPhoneNumber) => {
 
     if (attemptErr) throw attemptErr;
 
-    // If completing or failing, free the phone line
-    if (['completed', 'failed'].includes(status) && updatedAttempt && updatedAttempt.phone_line_id) {
+    // If completing, failing, or forcing a retry, free the phone line
+    if (['completed', 'failed', 'retry'].includes(status) && updatedAttempt && updatedAttempt.phone_line_id) {
       const { data: line, error: lineFetchErr } = await supabase
         .from('phone_lines')
         .select('attempts_processed')

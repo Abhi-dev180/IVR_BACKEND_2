@@ -236,6 +236,7 @@ export const checkAndScheduleRetries = async () => {
         .from('attempts')
         .update({
           status: 'retry',
+          retry_count: (attempt.retry_count || 0) + 1,
           logs: newLogs,
           updated_at: new Date().toISOString()
         })
