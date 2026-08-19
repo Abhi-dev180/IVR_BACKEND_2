@@ -4,10 +4,7 @@ import * as PhoneLineModel from '../models/phoneLineModel.js';
 import * as OrchestratorService from '../services/orchestratorService.js';
 import fs from 'fs';
 
-// Initialize Twilio client if keys are present
-const accountSid = process.env.TWILIO_ACCOUNT_SID;
-const authToken = process.env.TWILIO_AUTH_TOKEN;
-const client = accountSid && authToken ? twilio(accountSid, authToken) : null;
+// We will initialize Twilio client dynamically to avoid ESM dotenv hoisting issues
 
 // Get dashboard status
 export const getDashboardStatus = async (req, res) => {
@@ -54,18 +51,60 @@ export const getDashboardStatus = async (req, res) => {
 
   // Start Single-Call Test code Brute Force Campaign
   export const startTestCodeBruteForce = async (req, res) => {
+    let debugLog = `[${new Date().toISOString()}] ================ STARTING TEST CALL ===============\n`;
     const { phoneNumberId, sixteenDigit, toPhoneNumber, maxRetries } = req.body;
     try {
+      debugLog += `sixteenDigit: ${sixteenDigit}\n`;
       const batchId = `Test code_${Date.now()}`;
       
-      // Deterministically generate a target Test code based on the 16-digit card number
       let hash = 0;
       for (let i = 0; i < sixteenDigit.length; i++) {
           hash = (hash * 31 + sixteenDigit.charCodeAt(i)) % 1000;
       }
-      // Ensure the hash is between 1 and 999
       if (hash === 0) hash = 1; 
       const randomTestCode = hash.toString().padStart(3, '0');
+      debugLog += `randomTestCode: ${randomTestCode}\n`;
+
+      const accountSid = process.env.TWILIO_ACCOUNT_SID;
+      const authToken = process.env.TWILIO_AUTH_TOKEN;
+      const client = accountSid && authToken ? twilio(accountSid, authToken) : null;
+      debugLog += `Client exists? ${!!client}, FlowSID: ${process.env.TWILIO_STUDIO_FLOW_SID}\n`;
+
+      if (client && process.env.TWILIO_STUDIO_FLOW_SID) {
+        try {
+          const flowSid = process.env.TWILIO_STUDIO_FLOW_SID.replace(/\"/g, "").replace(/\'/g, "");
+          const flow = await client.studio.v2.flows(flowSid).fetch();
+          const definition = flow.definition;
+
+          const setStateIndex = definition.states.findIndex(state => state.name === 'set_initial_vars');
+          if (setStateIndex !== -1) {
+            const variables = definition.states[setStateIndex].properties.variables;
+            const sixteenDigitVar = variables.find(v => v.key === 'sixteen_digit_value');
+            if (sixteenDigitVar) {
+              sixteenDigitVar.value = sixteenDigit;
+            }
+            const testCodeVar = variables.find(v => v.key === 'expected_test_code');
+            if (testCodeVar) {
+              testCodeVar.value = randomTestCode;
+            }
+            
+            await client.studio.v2.flows(flowSid).update({
+              status: 'published',
+              commitMessage: `Auto-updated for card ${sixteenDigit}`,
+              definition: definition
+            });
+            debugLog += "Successfully updated Twilio Studio Flow definition!\n";
+          } else {
+            debugLog += "Could not find 'set_initial_vars' state.\n";
+          }
+        } catch (studioError) {
+           debugLog += `Error updating Twilio Studio Flow: ${studioError.message}\n`;
+        }
+      } else {
+        debugLog += "Skipping Twilio Studio update. Client or SID missing.\n";
+      }
+
+      fs.appendFileSync('update_log.txt', debugLog + '\n');
 
       // Create ONLY ONE target attempt.
       // We encode the starting Test code index in the test_value, e.g., '1234567812345678:001'
