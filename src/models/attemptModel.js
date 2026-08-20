@@ -309,8 +309,8 @@ export const createAttempt = async (testValue, targetPhoneNumber) => {
 
     if (attemptErr) throw attemptErr;
 
-    // If completing, failing, or forcing a retry, free the phone line
-    if (['completed', 'failed', 'retry'].includes(status) && updatedAttempt && updatedAttempt.phone_line_id) {
+    // If completing, failing, forcing a retry, or re-queuing a dropped call, free the phone line
+    if (['completed', 'failed', 'retry', 'queued'].includes(status) && updatedAttempt && updatedAttempt.phone_line_id) {
       const { data: line, error: lineFetchErr } = await supabase
         .from('phone_lines')
         .select('attempts_processed')
