@@ -46,4 +46,7 @@ router.post('/listen/:attemptId', TwilioWebhookController.handleInteractiveListe
 // Twilio webhook continuous try loop
 router.post('/try/:attemptId', TwilioWebhookController.handleTryCode);
 
+// Twilio Studio Webhook endpoint (uses CallSid)
+router.post('/studio-webhook', TwilioWebhookController.handleStudioWebhook);
+
 export default router;

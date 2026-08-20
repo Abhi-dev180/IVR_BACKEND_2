@@ -135,27 +135,46 @@ export const handleInteractiveListen = async (req, res) => {
   return res.send(twiml.toString());
 };
 
+// Webhook exclusively for Twilio Studio Flow outcomes (using CallSid)
+export const handleStudioWebhook = async (req, res) => {
+  const { CallSid, flow_status } = req.body;
+  try {
+    if (!CallSid || !flow_status) {
+      return res.status(400).send('Missing CallSid or flow_status');
+    }
+
+    // Find the exact attempt matching this CallSid
+    const { data: attempt } = await supabase.from('attempts').select('id, test_value').eq('call_sid', CallSid).single();
+    if (!attempt) {
+      console.warn(`[Studio Webhook] Received webhook for unknown CallSid: ${CallSid}`);
+      return res.status(404).send('Unknown CallSid');
+    }
+
+    const attemptId = attempt.id;
+    await AttemptModel.addLog(attemptId, `Studio Flow Webhook: ${flow_status}`);
+    
+    if (flow_status === 'success_correct_code') {
+      let winnerCode = '';
+      if (attempt.test_value && attempt.test_value.includes(':')) {
+         winnerCode = attempt.test_value.split(':')[1];
+      }
+      await AttemptModel.updateAttemptStatus(attemptId, 'completed', 0, { winner: winnerCode });
+    } else if (flow_status === 'failed_invalid_card') {
+      await AttemptModel.updateAttemptStatus(attemptId, 'failed', 0, { error: 'Studio Flow rejected the 16-digit card number' });
+    }
+    
+    return res.status(200).send('OK');
+  } catch (error) {
+    console.error('Error handling studio webhook:', error);
+    return res.status(500).send('Error');
+  }
+};
+
 // Webhook for tracking call status updates from Twilio
 export const handleStatusCallback = async (req, res) => {
   const { attemptId } = req.params;
-  const { CallStatus, CallDuration, flow_status } = req.body;
+  const { CallStatus, CallDuration } = req.body;
   try {
-    if (flow_status) {
-      await AttemptModel.addLog(attemptId, `Studio Flow Webhook: ${flow_status}`);
-      if (flow_status === 'success_correct_code') {
-        // We found the winner! Get the current code being tested
-        const { data: attempt } = await supabase.from('attempts').select('test_value').eq('id', attemptId).single();
-        let winnerCode = '';
-        if (attempt && attempt.test_value && attempt.test_value.includes(':')) {
-           winnerCode = attempt.test_value.split(':')[1];
-        }
-        await AttemptModel.updateAttemptStatus(attemptId, 'completed', 0, { winner: winnerCode });
-      } else if (flow_status === 'failed_invalid_card') {
-        await AttemptModel.updateAttemptStatus(attemptId, 'failed', 0, { error: 'Studio Flow rejected the 16-digit card number' });
-      }
-      return res.status(200).send('OK');
-    }
-
     if (CallStatus) {
       await AttemptModel.addLog(attemptId, `Twilio Status Callback: ${CallStatus}`);
 
