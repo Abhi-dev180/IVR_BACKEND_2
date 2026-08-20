@@ -163,7 +163,7 @@ export const handleStatusCallback = async (req, res) => {
 
       if (attempt && attempt.target_test_code && !foundWinner) {
         await AttemptModel.addLog(attemptId, 'Call completed prematurely at Twilio limit without reaching target. Auto-resuming...');
-        await AttemptModel.updateAttemptStatus(attemptId, 'retry', duration, { twilioStatus: CallStatus });
+        await AttemptModel.updateAttemptStatus(attemptId, 'queued', duration, { twilioStatus: CallStatus });
       } else {
         await AttemptModel.updateAttemptStatus(attemptId, 'completed', duration, { twilioStatus: CallStatus });
       }
