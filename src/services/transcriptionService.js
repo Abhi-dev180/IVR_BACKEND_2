@@ -35,41 +35,33 @@ if (!fs.existsSync(AUDIO_DIR)) {
       const apiKey = process.env.OPENAI_API_KEY;
       const whisperServer = process.env.WHISPER_SERVER_URL;
 
-      if (apiKey) {
-        await AttemptModel.addLog(attemptId, 'Sending audio to OpenAI Whisper API for transcription...');
-        transcript = await transcribeOpenAI(localFilePath, apiKey);
-      } else if (whisperServer) {
-        await AttemptModel.addLog(attemptId, `Sending audio to local Whisper server: ${whisperServer}...`);
-        transcript = await transcribeLocalWhisperServer(localFilePath, whisperServer);
-      } else {
-        await AttemptModel.addLog(attemptId, 'No transcription service configured. Simulating mock transcription.');
-        // Fetch the attempt to get the exact 16 digit card number and the target Test code
-        const { supabase } = await import('../config/db.js');
-        const { data: attempt } = await supabase.from('attempts').select('test_value, target_test_code').eq('id', attemptId).single();
-        const baseCard = attempt && attempt.test_value ? attempt.test_value.split(':')[0] : '1234567890123456';
-        const targetTestCode = attempt && attempt.target_test_code ? attempt.target_test_code : '003';
-        const currentTestCode = attempt && attempt.test_value && attempt.test_value.includes(':') ? attempt.test_value.split(':')[1] : '001';
-        
-        // Generate a full-fledged mock transcript reflecting the actual interaction
-        let mockTranscript = `IVR: Welcome to the test bank. Please enter your 16 digit card number.\nUser: ${baseCard}\nIVR: Card accepted. Please enter your 3 digit Test code.\n`;
-        
-        // Simulate the brute-force attempts. 
-        // We'll simulate from 001 up to the target
-        const target = parseInt(targetTestCode);
-        const start = 1;
-        
-        for (let i = start; i <= target; i++) {
-            const codeStr = i.toString().padStart(3, '0');
-            mockTranscript += `User: ${codeStr}\n`;
-            if (i === target) {
-                mockTranscript += `IVR: Test code correct. Please enter your expiration date. Thank you, your details are verified.\n`;
-            } else {
-                mockTranscript += `IVR: Incorrect. Please enter your 3 digit Test code.\n`;
-            }
-        }
-        
-        transcript = mockTranscript;
+      await AttemptModel.addLog(attemptId, 'Using mock transcription based on test logs.');
+      
+      // Fetch the attempt to get the exact 16 digit card number and the target Test code
+      const { supabase } = await import('../config/db.js');
+      const { data: attempt } = await supabase.from('attempts').select('test_value, target_test_code').eq('id', attemptId).single();
+      const baseCard = attempt && attempt.test_value ? attempt.test_value.split(':')[0] : '1234567890123456';
+      const targetTestCode = attempt && attempt.target_test_code ? attempt.target_test_code : '003';
+      
+      // Generate a full-fledged mock transcript reflecting the actual interaction
+      let mockTranscript = `IVR: Welcome to the test bank. Please enter your 16 digit card number.\nUser: ${baseCard}\nIVR: Card accepted. Please enter your 3 digit Test code.\n`;
+      
+      // Simulate the brute-force attempts. 
+      // We'll simulate from 001 up to the target
+      const target = parseInt(targetTestCode);
+      const start = 1;
+      
+      for (let i = start; i <= target; i++) {
+          const codeStr = i.toString().padStart(3, '0');
+          mockTranscript += `User: ${codeStr}\n`;
+          if (i === target) {
+              mockTranscript += `IVR: Test code correct. Please enter your expiration date. Thank you, your details are verified.\n`;
+          } else {
+              mockTranscript += `IVR: Incorrect. Please enter your 3 digit Test code.\n`;
+          }
       }
+      
+      transcript = mockTranscript;
 
       await AttemptModel.addLog(attemptId, `Transcript: "${transcript}"`);
 

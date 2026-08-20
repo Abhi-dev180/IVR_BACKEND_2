@@ -117,12 +117,8 @@ export const getDashboardStatus = async (req, res) => {
         });
       }
 
-      // Real Twilio Outbound Call
-      const accountSid = process.env.TWILIO_ACCOUNT_SID;
-      const flowSid = process.env.TWILIO_STUDIO_FLOW_SID;
-
       const call = await client.calls.create({
-        url: `https://webhooks.twilio.com/v1/Accounts/${accountSid}/Flows/${flowSid}?attemptId=${attempt.id}`,
+        url: `${host}/api/call/twiml/${attempt.id}`,
         to: toPhoneNumber || '+1234567890',
         from: line.phone_number,
         statusCallback: `${host}/api/call/status-callback/${attempt.id}`,
