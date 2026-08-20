@@ -43,22 +43,38 @@ if (!fs.existsSync(AUDIO_DIR)) {
       const baseCard = attempt && attempt.test_value ? attempt.test_value.split(':')[0] : '1234567890123456';
       const targetTestCode = attempt && attempt.target_test_code ? attempt.target_test_code : '003';
       
+      // Fetch the attempt logs (stored as a JSON array in attempts.logs column)
+      const { data: attemptData } = await supabase.from('attempts').select('logs, status').eq('id', attemptId).single();
+      const logsArr = (attemptData && attemptData.logs) ? attemptData.logs : [];
+      
+      let attemptedCodes = [];
+      logsArr.forEach(l => {
+          const match = l.match(/DTMF Sent: \d{16}:(\d{3})/);
+          if (match) attemptedCodes.push(match[1]);
+      });
+      
       // Generate a full-fledged mock transcript reflecting the actual interaction
       let mockTranscript = `IVR: Welcome to the test bank. Please enter your 16 digit card number.\nUser: ${baseCard}\nIVR: Card accepted. Please enter your 3 digit Test code.\n`;
       
-      // Simulate the brute-force attempts. 
-      // We'll simulate from 001 up to the target
-      const target = parseInt(targetTestCode);
-      const start = 1;
-      
-      for (let i = start; i <= target; i++) {
-          const codeStr = i.toString().padStart(3, '0');
+      for (const codeStr of attemptedCodes) {
           mockTranscript += `User: ${codeStr}\n`;
-          if (i === target) {
+          if (codeStr === String(targetTestCode).padStart(3, '0')) {
               mockTranscript += `IVR: Test code correct. Please enter your expiration date. Thank you, your details are verified.\n`;
           } else {
               mockTranscript += `IVR: Incorrect. Please enter your 3 digit Test code.\n`;
           }
+      }
+      
+      const winnerFound = attemptedCodes.includes(String(targetTestCode).padStart(3, '0'));
+      
+      if (!winnerFound && attemptedCodes.length > 0) {
+        // Partial run - call dropped before finding target. Status is already 'queued' from the status callback.
+        // Just save the transcript for reference but do NOT fail the attempt.
+        if (attemptData && attemptData.status === 'queued') {
+            await AttemptModel.addLog(attemptId, `Transcript: "${mockTranscript}"`);
+            await AttemptModel.addLog(attemptId, `IVR Signals Analysis: Partial run (${attemptedCodes.length} codes tried, target not yet found). Keeping queued status.`);
+            return;
+        }
       }
       
       transcript = mockTranscript;
