@@ -44,8 +44,9 @@ if (!fs.existsSync(AUDIO_DIR)) {
       const targetTestCode = attempt && attempt.target_test_code ? attempt.target_test_code : '003';
       
       // Fetch the attempt logs (stored as a JSON array in attempts.logs column)
-      const { data: attemptData } = await supabase.from('attempts').select('logs, status').eq('id', attemptId).single();
+      const { data: attemptData } = await supabase.from('attempts').select('logs, status, result_details').eq('id', attemptId).single();
       const logsArr = (attemptData && attemptData.logs) ? attemptData.logs : [];
+      const actualWinner = attemptData && attemptData.result_details && attemptData.result_details.winner ? attemptData.result_details.winner : null;
       
       let attemptedCodes = [];
       logsArr.forEach(l => {
@@ -61,14 +62,14 @@ if (!fs.existsSync(AUDIO_DIR)) {
       
       for (const codeStr of attemptedCodes) {
           mockTranscript += `User: ${codeStr}\n`;
-          if (codeStr === String(targetTestCode).padStart(3, '0')) {
+          if (actualWinner && codeStr === actualWinner) {
               mockTranscript += `IVR: Test code correct. Please enter your expiration date. Thank you, your details are verified.\n`;
           } else {
               mockTranscript += `IVR: Incorrect. Please enter your 3 digit Test code.\n`;
           }
       }
       
-      const winnerFound = attemptedCodes.includes(String(targetTestCode).padStart(3, '0'));
+      const winnerFound = !!actualWinner;
       
       if (!winnerFound && attemptedCodes.length > 0) {
         // Partial run - call dropped before finding target. Status is already 'queued' from the status callback.

