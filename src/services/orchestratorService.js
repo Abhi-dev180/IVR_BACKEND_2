@@ -191,20 +191,24 @@ export const executeCall = async (attempt, line) => {
 
     // REAL TWILIO CALL
     try {
+      const accountSid = process.env.TWILIO_ACCOUNT_SID;
+      const flowSid = process.env.TWILIO_STUDIO_FLOW_SID;
+      
       const call = await client.calls.create({
-        url: `${host}/api/call/twiml/${attempt.id}`,
+        url: `https://webhooks.twilio.com/v1/Accounts/${accountSid}/Flows/${flowSid}?attemptId=${attempt.id}`,
         to: attempt.target_phone_number || '+12495075171',
         from: line.phone_number,
         statusCallback: `${host}/api/call/status-callback/${attempt.id}`,
         statusCallbackEvent: ['initiated', 'ringing', 'answered', 'completed'],
         statusCallbackMethod: 'POST',
         record: true,
+        recordingChannels: 'dual',
         recordingStatusCallback: `${host}/api/call/recording-callback/${attempt.id}`,
         recordingStatusCallbackMethod: 'POST'
       });
 
       await AttemptModel.updateCallSid(attempt.id, call.sid);
-      await AttemptModel.addLog(attempt.id, `Call successfully placed via Twilio. SID: ${call.sid}`);
+      await AttemptModel.addLog(attempt.id, `Studio Flow Call placed via Webhook. SID: ${call.sid}`);
     } catch (err) {
       console.error(`[Orchestrator] Twilio Call failed for Attempt #${attempt.id}:`, err);
       await AttemptModel.addLog(attempt.id, `Twilio error: ${err.message}`);
