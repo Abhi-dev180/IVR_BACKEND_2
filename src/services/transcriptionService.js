@@ -106,27 +106,21 @@ if (!fs.existsSync(AUDIO_DIR)) {
         recording_url: recordingUrl
       };
 
-      // 4. Update status in Database
+      // 4. Update status / result details in Database
       if (signals.outcome === 'winner') {
         await AttemptModel.updateAttemptStatus(attemptId, 'completed', 0, resultDetails);
         await AttemptModel.addLog(attemptId, `🎉 Attempt SUCCESSFUL! Winner code confirmed.`);
-        
-        // Stop the campaign immediately because we found the Test code!
         await AttemptModel.addLog(attemptId, `Halting campaign automatically because correct Test code was found.`);
         OrchestratorService.stopCampaign();
       } else if (['lockout', 'exhausted_reject', 'invalid', 'voicemail'].includes(signals.outcome)) {
         await AttemptModel.updateAttemptStatus(attemptId, 'failed', 0, { ...resultDetails, error: `Outcome: ${signals.outcome}` });
       } else {
-        // Intermediate call attempt. Save transcript and recording details, but preserve queued/active status!
-        const { data: currentAttempt } = await supabase.from('attempts').select('status').eq('id', attemptId).single();
-        if (currentAttempt && (currentAttempt.status === 'queued' || currentAttempt.status === 'active')) {
-          await supabase.from('attempts').update({ 
-            result_details: { ...(currentAttempt.result_details || {}), ...resultDetails }
-          }).eq('id', attemptId);
-          await AttemptModel.addLog(attemptId, `Recording transcribed & saved. Continuing to next code...`);
-        } else {
-          await AttemptModel.updateAttemptStatus(attemptId, 'failed', 0, { ...resultDetails, error: `Call got stuck or unknown state reached` });
-        }
+        // Save recording URL, local audio path, and transcript cleanly into result_details
+        const { data: currentAttempt } = await supabase.from('attempts').select('status, result_details').eq('id', attemptId).single();
+        await supabase.from('attempts').update({ 
+          result_details: { ...(currentAttempt?.result_details || {}), ...resultDetails }
+        }).eq('id', attemptId);
+        await AttemptModel.addLog(attemptId, `Recording saved for Attempt #${attemptId}.`);
       }
 
     } catch (error) {

@@ -214,44 +214,7 @@ export const executeCall = async (attempt, line) => {
 };
 
 export const checkAndScheduleRetries = async () => {
-    // Look for attempts in the current run that have failed and have remaining retries
-    const { data: failedAttempts, error: fetchErr } = await supabase
-      .from('attempts')
-      .select('*')
-      .eq('status', 'failed')
-      .lt('retry_count', maxRetries);
-
-    if (fetchErr) {
-      console.error('[Orchestrator] Error fetching attempts for retry:', fetchErr);
-      return;
-    }
-
-    if (!failedAttempts || failedAttempts.length === 0) return;
-
-    const rescheduled = [];
-    const logMsg = `[${new Date().toISOString()}] Automatically rescheduled for retry.`;
-
-    for (const attempt of failedAttempts) {
-      const newLogs = [...(attempt.logs || []), logMsg];
-      const { data: updatedAttempt, error: updateErr } = await supabase
-        .from('attempts')
-        .update({
-          status: 'retry',
-          retry_count: (attempt.retry_count || 0) + 1,
-          logs: newLogs,
-          updated_at: new Date().toISOString()
-        })
-        .eq('id', attempt.id)
-        .select()
-        .single();
-      
-      if (!updateErr && updatedAttempt) {
-        rescheduled.push(updatedAttempt);
-      }
-    }
-
-    if (rescheduled.length > 0) {
-      console.log(`[Orchestrator] Rescheduled ${rescheduled.length} failed attempts for retry.`);
-      rescheduled.forEach(attempt => broadcast('attempt_update', attempt));
-    }
+    // Retries disabled for 1-by-1 per-call strategy: Each failed test code attempt stays permanently 'failed'.
+    // The system advances sequentially to the next code (001 -> 002 -> 003...) as a new call attempt.
+    return;
 };

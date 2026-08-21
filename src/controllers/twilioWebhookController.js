@@ -240,6 +240,8 @@ export const handleStudioWebhook = async (req, res) => {
       await AttemptModel.updateAttemptStatus(attemptId, 'completed', 0, { winner: winnerCode });
     } else if (flow_status === 'failed_invalid_card') {
       await AttemptModel.updateAttemptStatus(attemptId, 'failed', 0, { error: 'Studio Flow rejected the 16-digit card number' });
+      await AttemptModel.addLog(attemptId, `❌ 16-digit card number rejected by Target IVR. Halting campaign.`);
+      OrchestratorService.stopCampaign();
     }
     
     return res.status(200).send('OK');
