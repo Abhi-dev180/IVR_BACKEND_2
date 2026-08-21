@@ -259,6 +259,19 @@ export const createAttempt = async (testValue, targetPhoneNumber) => {
       }
 
       if (!fbAttempt) return null;
+
+      // CRITICAL: Immediately mark as active BEFORE returning to prevent another tick from claiming same attempt
+      const { error: lockErr } = await supabase
+        .from('attempts')
+        .update({ status: 'active', updated_at: new Date().toISOString() })
+        .eq('id', fbAttempt.id)
+        .eq('status', fbAttempt.status); // Only update if still in expected state (optimistic lock)
+      
+      if (lockErr) {
+        console.warn('[AttemptModel] Failed to lock attempt, skipping:', lockErr.message);
+        return null; // Another tick already claimed it
+      }
+
       return await assignAttemptToLine(fbAttempt.id, lineId);
     }
 

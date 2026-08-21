@@ -146,40 +146,46 @@ export const terminateActiveCalls = async () => {
 export const tick = async () => {
     if (!isCampaignRunning) return;
 
-    // 1. Get all phone lines
+    // STRICT 1-AT-A-TIME: Check if any call is currently active
+    const { count: activeCount } = await supabase
+      .from('attempts')
+      .select('*', { count: 'exact', head: true })
+      .in('status', ['active']);
+
+    if (activeCount && activeCount > 0) {
+      return; // A call is already in progress — wait for it to finish
+    }
+
+    // 1. Get all phone lines (only process 1 at a time)
     const lines = await PhoneLineModel.getAllPhoneLines();
-    const idleLines = lines.filter(l => l.status === 'idle' && (!campaignLineId || l.id === campaignLineId));
+    const idleLine = lines.find(l => l.status === 'idle' && (!campaignLineId || l.id === campaignLineId));
 
-    if (idleLines.length === 0) {
-      return; // All lines are busy
+    if (!idleLine) {
+      return; // No idle line available
     }
 
-    // 2. Process attempts for each idle line
-    for (const line of idleLines) {
-      // Claim the next queued or retry attempt
-      const attempt = await AttemptModel.claimNextQueuedAttempt(line.id);
-      if (!attempt) {
-        // No queued attempts. Check if we have failed attempts that should be retried.
-        await checkAndScheduleRetries();
-        
-        // Auto-stop campaign if there are absolutely no active, queued, or retry attempts left
-        const { count, error } = await supabase
-          .from('attempts')
-          .select('*', { count: 'exact', head: true })
-          .in('status', ['queued', 'retry', 'active']);
-          
-        if (!error && count === 0) {
-          console.log('[Orchestrator] All queues are completely empty. Auto-stopping campaign.');
-          await stopCampaign();
-        }
-        break; 
-      }
-
-      console.log(`[Orchestrator] Assigning Attempt #${attempt.id} to Phone Line ${line.phone_number}`);
+    // 2. Claim the next single queued attempt
+    const attempt = await AttemptModel.claimNextQueuedAttempt(idleLine.id);
+    if (!attempt) {
+      // No queued attempts. Check if campaign should stop.
+      await checkAndScheduleRetries();
       
-      // Place the call
-      executeCall(attempt, line);
+      const { count, error } = await supabase
+        .from('attempts')
+        .select('*', { count: 'exact', head: true })
+        .in('status', ['queued', 'retry', 'active']);
+        
+      if (!error && count === 0) {
+        console.log('[Orchestrator] All queues are completely empty. Auto-stopping campaign.');
+        await stopCampaign();
+      }
+      return;
     }
+
+    console.log(`[Orchestrator] Assigning Attempt #${attempt.id} to Phone Line ${idleLine.phone_number}`);
+    
+    // Place the call (awaited so line is marked busy BEFORE next tick fires)
+    await executeCall(attempt, idleLine);
 };
 
 export const executeCall = async (attempt, line) => {
