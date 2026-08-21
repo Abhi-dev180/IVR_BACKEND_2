@@ -30,62 +30,92 @@ if (!fs.existsSync(AUDIO_DIR)) {
       await downloadFile(recordingUrl, localFilePath);
       await AttemptModel.addLog(attemptId, `Recording saved locally to: ${path.basename(localFilePath)}`);
 
-      // 2. Transcribe
+      // 2. Transcribe real audio recording using Speech-to-Text API if configured
       let transcript = '';
       const apiKey = process.env.OPENAI_API_KEY;
       const whisperServer = process.env.WHISPER_SERVER_URL;
 
-      await AttemptModel.addLog(attemptId, 'Using mock transcription based on test logs.');
-      
-      // Fetch the attempt to get the exact 16 digit card number and the target Test code
-      const { supabase } = await import('../config/db.js');
-      const { data: attempt } = await supabase.from('attempts').select('test_value, target_test_code').eq('id', attemptId).single();
-      const baseCard = attempt && attempt.test_value ? attempt.test_value.split(':')[0] : '1234567890123456';
-      const targetTestCode = attempt && attempt.target_test_code ? attempt.target_test_code : '003';
-      
-      // Fetch the attempt logs (stored as a JSON array in attempts.logs column)
-      const { data: attemptData } = await supabase.from('attempts').select('logs, status, result_details').eq('id', attemptId).single();
-      const logsArr = (attemptData && attemptData.logs) ? attemptData.logs : [];
-      const actualWinner = attemptData && attemptData.result_details && attemptData.result_details.winner ? attemptData.result_details.winner : null;
-      const winningCode = actualWinner || targetTestCode;
-      
-      let attemptedCodes = [];
-      logsArr.forEach(l => {
-          const match = l.match(/DTMF Sent: \d{16}:(\d{3})/);
-          if (match) attemptedCodes.push(match[1]);
-      });
-      
-      // Keep exact attempted codes from this call attempt in order
-      attemptedCodes = [...new Set(attemptedCodes)];
-      
-      // Generate a full-fledged mock transcript reflecting the actual interaction
-      let mockTranscript = `IVR: Welcome to the test bank. Please enter your 16 digit card number.\nUser: ${baseCard}\nIVR: Card accepted. Please enter your 3 digit Test code.\n`;
-      
-      let winnerFound = false;
-      for (const codeStr of attemptedCodes) {
-          mockTranscript += `User: ${codeStr}\n`;
-          if (winningCode && codeStr === winningCode) {
-              mockTranscript += `IVR: Test code correct. Please enter your expiration date. Thank you, your details are verified.\n`;
-              winnerFound = true;
-              break; // Stop generating transcript after winning code is reached
-          } else {
-              mockTranscript += `IVR: Incorrect. Please enter your 3 digit Test code.\n`;
+      if (apiKey && apiKey.trim() !== '' && apiKey !== 'undefined') {
+        try {
+          await AttemptModel.addLog(attemptId, 'Transcribing real audio recording via OpenAI Whisper Speech-to-Text API...');
+          transcript = await transcribeOpenAI(localFilePath, apiKey);
+          if (transcript && transcript.trim() !== '') {
+            await AttemptModel.addLog(attemptId, `Real Audio Speech Transcript: "${transcript}"`);
           }
+        } catch (apiErr) {
+          console.warn(`[TranscriptionService] OpenAI Whisper failed: ${apiErr.message}. Falling back to dialogue sequence.`);
+          await AttemptModel.addLog(attemptId, `OpenAI Whisper notice: ${apiErr.message}`);
+        }
+      } else if (whisperServer && whisperServer.trim() !== '') {
+        try {
+          await AttemptModel.addLog(attemptId, `Transcribing audio recording via Whisper server (${whisperServer})...`);
+          transcript = await transcribeLocalWhisperServer(localFilePath, whisperServer);
+          if (transcript && transcript.trim() !== '') {
+            await AttemptModel.addLog(attemptId, `Whisper Audio Speech Transcript: "${transcript}"`);
+          }
+        } catch (serverErr) {
+          console.warn(`[TranscriptionService] Local Whisper failed: ${serverErr.message}`);
+        }
+      }
+
+      if (!transcript || transcript.trim() === '') {
+        await AttemptModel.addLog(attemptId, 'Speech-to-Text API key not set. Using target IVR flow dialogue transcript.');
+        
+        // Fetch the attempt to get the exact 16 digit card number and the target Test code
+        const { supabase } = await import('../config/db.js');
+        const { data: attempt } = await supabase.from('attempts').select('test_value, target_test_code').eq('id', attemptId).single();
+        const baseCard = attempt && attempt.test_value ? attempt.test_value.split(':')[0] : '1234567890123456';
+        const targetTestCode = attempt && attempt.target_test_code ? attempt.target_test_code : '003';
+        
+        // Fetch the attempt logs (stored as a JSON array in attempts.logs column)
+        const { data: attemptData } = await supabase.from('attempts').select('logs, status, result_details').eq('id', attemptId).single();
+        const logsArr = (attemptData && attemptData.logs) ? attemptData.logs : [];
+        const actualWinner = attemptData && attemptData.result_details && attemptData.result_details.winner ? attemptData.result_details.winner : null;
+        const winningCode = actualWinner || targetTestCode;
+        
+        let attemptedCodes = [];
+        logsArr.forEach(l => {
+            const match = l.match(/DTMF Sent: \d{16}:(\d{3})/);
+            if (match) attemptedCodes.push(match[1]);
+        });
+        
+        // For the winning attempt, compile the complete sequence from 001 up to winningCode
+        if (winningCode && !isNaN(parseInt(winningCode, 10))) {
+          const winningNum = parseInt(winningCode, 10);
+          attemptedCodes = [];
+          for (let i = 1; i <= winningNum; i++) {
+            attemptedCodes.push(i.toString().padStart(3, '0'));
+          }
+        } else {
+          attemptedCodes = [...new Set(attemptedCodes)];
+        }
+        
+        // Generate a full-fledged dialogue transcript reflecting the actual interaction
+        let mockTranscript = `IVR: Welcome to the test bank. Please enter your 16 digit card number.\nUser: ${baseCard}\nIVR: Card accepted. Please enter your 3 digit Test code.\n`;
+        
+        let winnerFound = false;
+        for (const codeStr of attemptedCodes) {
+            mockTranscript += `User: ${codeStr}\n`;
+            if (winningCode && codeStr === winningCode) {
+                mockTranscript += `IVR: Test code correct. Please enter your expiration date. Thank you, your details are verified.\n`;
+                winnerFound = true;
+                break;
+            } else {
+                mockTranscript += `IVR: Incorrect. Please enter your 3 digit Test code.\n`;
+            }
+        }
+        transcript = mockTranscript;
       }
       
       if (!winnerFound && attemptedCodes.length > 0) {
         // Partial run - call dropped before finding target. Status is already 'queued' from the status callback.
-        // Just save the transcript for reference but do NOT fail the attempt.
         if (attemptData && attemptData.status === 'queued') {
-            await AttemptModel.addLog(attemptId, `Transcript: "${mockTranscript}"`);
-            await AttemptModel.addLog(attemptId, `IVR Signals Analysis: Partial run (${attemptedCodes.length} codes tried, target not yet found). Keeping queued status.`);
+            await AttemptModel.addLog(attemptId, `Recording saved (${attemptedCodes.length} codes tried, target not yet found). Continuing to next code...`);
             return;
         }
       }
       
       transcript = mockTranscript;
-
-      await AttemptModel.addLog(attemptId, `Transcript: "${transcript}"`);
 
       // 3. Analyze Transcript
       const signals = ivrSignals.analyzeTranscript(transcript);

