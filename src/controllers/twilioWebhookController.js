@@ -160,6 +160,11 @@ export const handleListenGreeting = async (req, res) => {
         result_details: { ...(attempt?.result_details || {}), transcript: currentTranscript }
       }).eq('id', attemptId);
 
+      // Step 1: Play all 16 digits completely OUTSIDE gather so speech cannot interrupt digit transmission
+      const dialpadDigits = formatDtmfHumanDialpad(baseCard);
+      twiml.play({ digits: dialpadDigits });
+
+      // Step 2: Listen for Target IVR response after digits are transmitted
       const gather = twiml.gather({
         input: 'speech',
         speechTimeout: 'auto',
@@ -167,10 +172,7 @@ export const handleListenGreeting = async (req, res) => {
         action: `${host}/api/call/listen-card/${attemptId}?testCode=${testCode}`,
         method: 'POST'
       });
-      // Send 16-digit card paced like human dialpad entry (4-digit chunks)
-      const dialpadDigits = formatDtmfHumanDialpad(baseCard);
-      gather.play({ digits: dialpadDigits });
-      gather.pause({ length: 4 });
+      gather.pause({ length: 3 });
       twiml.redirect({ method: 'POST' }, `${host}/api/call/listen-card/${attemptId}?testCode=${testCode}`);
 
     } else {
@@ -250,11 +252,14 @@ export const handleListenCard = async (req, res) => {
 
     // Check if IVR is repeating/asking for card number again (e.g. if previous DTMF was sent too early)
     if (isAskingForCardPrompt(SpeechResult)) {
-      await AttemptModel.addLog(attemptId, `IVR requested card number again. Re-transmitting card DTMF (Dialpad Paced): ${baseCard}`);
+      await AttemptModel.addLog(attemptId, `IVR requested card number again. Re-transmitting card DTMF (Uninterruptible): ${baseCard}`);
       currentTranscript = currentTranscript ? `${currentTranscript}\nUser (DTMF): ${baseCard}` : `User (DTMF): ${baseCard}`;
       await supabase.from('attempts').update({
         result_details: { ...(attempt?.result_details || {}), transcript: currentTranscript }
       }).eq('id', attemptId);
+
+      const dialpadDigits = formatDtmfHumanDialpad(baseCard);
+      twiml.play({ digits: dialpadDigits });
 
       const gather = twiml.gather({
         input: 'speech',
@@ -263,9 +268,7 @@ export const handleListenCard = async (req, res) => {
         action: `${host}/api/call/listen-card/${attemptId}?testCode=${testCode}`,
         method: 'POST'
       });
-      const dialpadDigits = formatDtmfHumanDialpad(baseCard);
-      gather.play({ digits: dialpadDigits });
-      gather.pause({ length: 4 });
+      gather.pause({ length: 3 });
       twiml.redirect({ method: 'POST' }, `${host}/api/call/listen-card/${attemptId}?testCode=${testCode}`);
       res.type('text/xml');
       return res.send(twiml.toString());
@@ -283,6 +286,9 @@ export const handleListenCard = async (req, res) => {
         result_details: { ...(freshAttempt?.result_details || attempt?.result_details || {}), transcript: freshTranscript }
       }).eq('id', attemptId);
 
+      // Play test code digits OUTSIDE gather
+      twiml.play({ digits: `w${testCode}` });
+
       const gather = twiml.gather({
         input: 'speech',
         speechTimeout: 'auto',
@@ -290,8 +296,7 @@ export const handleListenCard = async (req, res) => {
         action: `${host}/api/call/listen-code/${attemptId}?testCode=${testCode}`,
         method: 'POST'
       });
-      gather.play({ digits: `w${testCode}` });
-      gather.pause({ length: 5 });
+      gather.pause({ length: 3 });
       twiml.redirect({ method: 'POST' }, `${host}/api/call/listen-code/${attemptId}?testCode=${testCode}`);
 
     } else {
