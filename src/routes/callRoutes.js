@@ -43,8 +43,16 @@ router.post('/recording-callback/:attemptId', TwilioWebhookController.handleReco
 // Twilio webhook interactive listen callback (DEPRECATED)
 router.post('/listen/:attemptId', TwilioWebhookController.handleInteractiveListen);
 
-// Twilio webhook continuous try loop
+// Twilio webhook continuous try loop (legacy, kept for backwards compatibility)
 router.post('/try/:attemptId', TwilioWebhookController.handleTryCode);
+
+// Twilio speech-listening stage webhooks (active flow)
+router.post('/listen-greeting/:attemptId', TwilioWebhookController.handleListenGreeting);
+router.get('/listen-greeting/:attemptId', TwilioWebhookController.handleListenGreeting);
+router.post('/listen-card/:attemptId', TwilioWebhookController.handleListenCard);
+router.get('/listen-card/:attemptId', TwilioWebhookController.handleListenCard);
+router.post('/listen-code/:attemptId', TwilioWebhookController.handleListenCode);
+router.get('/listen-code/:attemptId', TwilioWebhookController.handleListenCode);
 
 // Twilio Studio Webhook endpoint (uses CallSid)
 router.post('/studio-webhook', TwilioWebhookController.handleStudioWebhook);

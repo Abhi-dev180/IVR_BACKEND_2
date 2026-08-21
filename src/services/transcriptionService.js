@@ -77,12 +77,13 @@ if (!fs.existsSync(AUDIO_DIR)) {
       }
 
       if (!transcript || transcript.trim() === '') {
-        // Compile pure sequence of DTMF events from logs
-        let sequenceTranscript = `DTMF Transmitted: ${baseCard}\n`;
-        for (const codeStr of attemptedCodes) {
-            sequenceTranscript += `DTMF Transmitted: ${codeStr}\n`;
+        // Aggregate real live speech logs and DTMF events from actual call (0% mock text!)
+        const realEvents = logsArr.filter(l => l.includes('Twilio Live Speech') || l.includes('Transmitting') || l.includes('DTMF Sent'));
+        if (realEvents.length > 0) {
+          transcript = realEvents.join('\n');
+        } else {
+          transcript = 'No spoken speech captured in recording.';
         }
-        transcript = sequenceTranscript;
       }
       
       const isWinner = actualWinner && attemptedCodes.includes(actualWinner);
