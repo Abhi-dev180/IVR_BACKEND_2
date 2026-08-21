@@ -90,24 +90,17 @@ if (!fs.existsSync(AUDIO_DIR)) {
           attemptedCodes = [...new Set(attemptedCodes)];
         }
         
-        // Generate a full-fledged dialogue transcript reflecting the actual interaction
-        let mockTranscript = `IVR: Welcome to the test bank. Please enter your 16 digit card number.\nUser: ${baseCard}\nIVR: Card accepted. Please enter your 3 digit Test code.\n`;
-        
-        let winnerFound = false;
+        // Compile pure sequence of DTMF events from logs
+        let sequenceTranscript = `DTMF Transmitted: ${baseCard}\n`;
         for (const codeStr of attemptedCodes) {
-            mockTranscript += `User: ${codeStr}\n`;
-            if (winningCode && codeStr === winningCode) {
-                mockTranscript += `IVR: Test code correct. Please enter your expiration date. Thank you, your details are verified.\n`;
-                winnerFound = true;
-                break;
-            } else {
-                mockTranscript += `IVR: Incorrect. Please enter your 3 digit Test code.\n`;
-            }
+            sequenceTranscript += `DTMF Transmitted: ${codeStr}\n`;
         }
-        transcript = mockTranscript;
+        transcript = sequenceTranscript;
       }
       
-      if (!winnerFound && attemptedCodes.length > 0) {
+      const isWinner = actualWinner && attemptedCodes.includes(actualWinner);
+      
+      if (!isWinner && attemptedCodes.length > 0) {
         // Partial run - call dropped before finding target. Status is already 'queued' from the status callback.
         if (attemptData && attemptData.status === 'queued') {
             await AttemptModel.addLog(attemptId, `Recording saved (${attemptedCodes.length} codes tried, target not yet found). Continuing to next code...`);
