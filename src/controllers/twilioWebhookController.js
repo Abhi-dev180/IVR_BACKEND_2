@@ -219,6 +219,10 @@ export const handleStatusCallback = async (req, res) => {
           await AttemptModel.updateAttemptStatus(attemptId, 'queued', duration, { twilioStatus: CallStatus });
         } else if (attempt && attempt.status !== 'failed' && attempt.status !== 'completed') {
           await AttemptModel.updateAttemptStatus(attemptId, 'completed', duration, { twilioStatus: CallStatus });
+        } else if (duration > 0) {
+          // If attempt was already marked completed by Studio Webhook, update the actual Twilio Call Duration!
+          await supabase.from('attempts').update({ duration }).eq('id', attemptId);
+          await AttemptModel.addLog(attemptId, `Call duration updated from Twilio status callback: ${duration}s`);
         }
       } else if (['failed', 'busy', 'no-answer', 'canceled'].includes(CallStatus)) {
         const duration = parseInt(CallDuration) || 0;
