@@ -84,6 +84,11 @@ const isAskingForCardPrompt = (speech) => {
     lower.includes('enter your account') ||
     lower.includes('please enter') ||
     lower.includes('card number') ||
+    lower.includes('press the pound key') ||
+    lower.includes('pound key') ||
+    lower.includes('press or say 1') ||
+    lower.includes('do not have a credit card') ||
+    lower.includes('need a moment') ||
     (lower.includes('enter') && lower.includes('card')) ||
     (lower.includes('provide') && lower.includes('card'))
   );
@@ -103,6 +108,16 @@ const isAskingForCodePrompt = (speech) => {
     lower.includes('say your code') ||
     (lower.includes('enter') && lower.includes('code'))
   );
+};
+
+// Helper for 16-digit card human dialpad pacing (4-digit chunks with 0.5s pauses)
+const formatDtmfHumanDialpad = (cardDigits) => {
+  const digitsOnly = cardDigits.replace(/\D/g, '');
+  if (digitsOnly.length === 16) {
+    // Paces like human dialpad entry: w4520w3400w9797w2101
+    return `w${digitsOnly.slice(0, 4)}w${digitsOnly.slice(4, 8)}w${digitsOnly.slice(8, 12)}w${digitsOnly.slice(12, 16)}`;
+  }
+  return `w${digitsOnly}`;
 };
 
 // Stage 2: IVR greeting captured. Send card DTMF ONLY when IVR asks for card number.
@@ -141,8 +156,9 @@ export const handleListenGreeting = async (req, res) => {
         action: `${host}/api/call/listen-card/${attemptId}?testCode=${testCode}`,
         method: 'POST'
       });
-      // Single 'w' prefix adds 0.5s pause to let IVR receiver open cleanly before first digit
-      gather.play({ digits: `w${baseCard}` });
+      // Send 16-digit card paced like human dialpad entry (4-digit chunks)
+      const dialpadDigits = formatDtmfHumanDialpad(baseCard);
+      gather.play({ digits: dialpadDigits });
       gather.pause({ length: 4 });
       twiml.redirect({ method: 'POST' }, `${host}/api/call/listen-card/${attemptId}?testCode=${testCode}`);
 
@@ -212,7 +228,7 @@ export const handleListenCard = async (req, res) => {
 
     // Check if IVR is repeating/asking for card number again (e.g. if previous DTMF was sent too early)
     if (isAskingForCardPrompt(SpeechResult)) {
-      await AttemptModel.addLog(attemptId, `IVR requested card number again. Re-transmitting card DTMF: ${baseCard}`);
+      await AttemptModel.addLog(attemptId, `IVR requested card number again. Re-transmitting card DTMF (Dialpad Paced): ${baseCard}`);
       currentTranscript = currentTranscript ? `${currentTranscript}\nUser (DTMF): ${baseCard}` : `User (DTMF): ${baseCard}`;
       await supabase.from('attempts').update({
         result_details: { ...(attempt?.result_details || {}), transcript: currentTranscript }
@@ -225,7 +241,8 @@ export const handleListenCard = async (req, res) => {
         action: `${host}/api/call/listen-card/${attemptId}?testCode=${testCode}`,
         method: 'POST'
       });
-      gather.play({ digits: `w${baseCard}` });
+      const dialpadDigits = formatDtmfHumanDialpad(baseCard);
+      gather.play({ digits: dialpadDigits });
       gather.pause({ length: 4 });
       twiml.redirect({ method: 'POST' }, `${host}/api/call/listen-card/${attemptId}?testCode=${testCode}`);
       res.type('text/xml');
