@@ -193,7 +193,7 @@ export const executeCall = async (attempt, line) => {
     try {
       const call = await client.calls.create({
         url: `${host}/api/call/twiml/${attempt.id}`,
-        to: attempt.target_phone_number || '+12495075171',
+        to: attempt.target_phone_number || '+18009838472',
         from: line.phone_number,
         statusCallback: `${host}/api/call/status-callback/${attempt.id}`,
         statusCallbackEvent: ['initiated', 'ringing', 'answered', 'completed'],

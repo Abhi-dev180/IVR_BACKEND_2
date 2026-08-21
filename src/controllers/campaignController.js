@@ -68,11 +68,12 @@ export const getDashboardStatus = async (req, res) => {
       const accountSid = process.env.TWILIO_ACCOUNT_SID;
       const authToken = process.env.TWILIO_AUTH_TOKEN;
       const client = accountSid && authToken ? twilio(accountSid, authToken) : null;
-      debugLog += `Client exists? ${!!client}, FlowSID: ${process.env.TWILIO_STUDIO_FLOW_SID}\n`;
+      const studioFlowSid = process.env.TWILIO_STUDIO_FLOW_SID || 'FW0231a1a967dbc59016b2e1c5aef4d5a5';
+      debugLog += `Client exists? ${!!client}, FlowSID: ${studioFlowSid}\n`;
 
-      if (client && process.env.TWILIO_STUDIO_FLOW_SID) {
+      if (client && studioFlowSid) {
         try {
-          const flowSid = process.env.TWILIO_STUDIO_FLOW_SID.replace(/\"/g, "").replace(/\'/g, "");
+          const flowSid = studioFlowSid.replace(/\"/g, "").replace(/\'/g, "");
           const flow = await client.studio.v2.flows(flowSid).fetch();
           const definition = flow.definition;
 
@@ -109,7 +110,7 @@ export const getDashboardStatus = async (req, res) => {
       // Create ONLY ONE target attempt.
       // We encode the starting Test code index in the test_value, e.g., '1234567812345678:001'
       const targets = [{
-        phone_number: '+12495075171',
+        phone_number: req.body.toPhoneNumber || '+18009838472',
         test_value: `${sixteenDigit}:001`,
         target_test_code: randomTestCode
       }];

