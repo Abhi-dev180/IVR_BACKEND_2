@@ -141,8 +141,8 @@ export const handleListenGreeting = async (req, res) => {
         action: `${host}/api/call/listen-card/${attemptId}?testCode=${testCode}`,
         method: 'POST'
       });
-      // Play digits INSTANTLY (no pre-pause) so IVR does not hit silence timeout
-      gather.play({ digits: baseCard });
+      // Single 'w' prefix adds 0.5s pause to let IVR receiver open cleanly before first digit
+      gather.play({ digits: `w${baseCard}` });
       gather.pause({ length: 4 });
       twiml.redirect({ method: 'POST' }, `${host}/api/call/listen-card/${attemptId}?testCode=${testCode}`);
 
@@ -225,7 +225,7 @@ export const handleListenCard = async (req, res) => {
         action: `${host}/api/call/listen-card/${attemptId}?testCode=${testCode}`,
         method: 'POST'
       });
-      gather.play({ digits: baseCard });
+      gather.play({ digits: `w${baseCard}` });
       gather.pause({ length: 4 });
       twiml.redirect({ method: 'POST' }, `${host}/api/call/listen-card/${attemptId}?testCode=${testCode}`);
       res.type('text/xml');
@@ -251,7 +251,7 @@ export const handleListenCard = async (req, res) => {
         action: `${host}/api/call/listen-code/${attemptId}?testCode=${testCode}`,
         method: 'POST'
       });
-      gather.play({ digits: testCode });
+      gather.play({ digits: `w${testCode}` });
       gather.pause({ length: 5 });
       twiml.redirect({ method: 'POST' }, `${host}/api/call/listen-code/${attemptId}?testCode=${testCode}`);
 
