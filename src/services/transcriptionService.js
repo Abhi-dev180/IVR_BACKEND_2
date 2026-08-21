@@ -55,8 +55,17 @@ if (!fs.existsSync(AUDIO_DIR)) {
           if (match) attemptedCodes.push(match[1]);
       });
       
-      // Prevent duplicate chunks in the transcript if Twilio accidentally retried the webhook
-      attemptedCodes = [...new Set(attemptedCodes)];
+      // If winningCode exists, construct the full range from 001 up to winningCode
+      if (winningCode && !isNaN(parseInt(winningCode, 10))) {
+        const winningNum = parseInt(winningCode, 10);
+        const fullCodes = [];
+        for (let i = 1; i <= winningNum; i++) {
+          fullCodes.push(i.toString().padStart(3, '0'));
+        }
+        attemptedCodes = fullCodes;
+      } else {
+        attemptedCodes = [...new Set(attemptedCodes)];
+      }
       
       // Generate a full-fledged mock transcript reflecting the actual interaction
       let mockTranscript = `IVR: Welcome to the test bank. Please enter your 16 digit card number.\nUser: ${baseCard}\nIVR: Card accepted. Please enter your 3 digit Test code.\n`;
