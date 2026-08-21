@@ -127,14 +127,13 @@ export const handleListenGreeting = async (req, res) => {
 
     // Check if IVR is explicitly asking for the card number
     if (isAskingForCardPrompt(SpeechResult)) {
-      // ✅ IVR asked for card — send card DTMF now
+      // ✅ IVR asked for card — send card DTMF instantly!
       await AttemptModel.addLog(attemptId, `IVR asked for card number. Transmitting 16-digit card number over DTMF: ${baseCard}`);
       currentTranscript = currentTranscript ? `${currentTranscript}\nUser (DTMF): ${baseCard}` : `User (DTMF): ${baseCard}`;
       await supabase.from('attempts').update({
         result_details: { ...(attempt?.result_details || {}), transcript: currentTranscript }
       }).eq('id', attemptId);
 
-      const waitSeconds = parseInt(process.env.DTMF_WAIT_DELAY_SECONDS) || 2;
       const gather = twiml.gather({
         input: 'speech',
         speechTimeout: 'auto',
@@ -142,8 +141,8 @@ export const handleListenGreeting = async (req, res) => {
         action: `${host}/api/call/listen-card/${attemptId}?testCode=${testCode}`,
         method: 'POST'
       });
-      gather.pause({ length: waitSeconds });
-      gather.play({ digits: `ww${baseCard}` });
+      // Play digits INSTANTLY (no pre-pause) so IVR does not hit silence timeout
+      gather.play({ digits: baseCard });
       gather.pause({ length: 4 });
       twiml.redirect({ method: 'POST' }, `${host}/api/call/listen-card/${attemptId}?testCode=${testCode}`);
 
@@ -226,8 +225,7 @@ export const handleListenCard = async (req, res) => {
         action: `${host}/api/call/listen-card/${attemptId}?testCode=${testCode}`,
         method: 'POST'
       });
-      gather.pause({ length: 2 });
-      gather.play({ digits: `ww${baseCard}` });
+      gather.play({ digits: baseCard });
       gather.pause({ length: 4 });
       twiml.redirect({ method: 'POST' }, `${host}/api/call/listen-card/${attemptId}?testCode=${testCode}`);
       res.type('text/xml');
@@ -236,7 +234,7 @@ export const handleListenCard = async (req, res) => {
 
     // Check if IVR is asking for the test code / PIN
     if (isAskingForCodePrompt(SpeechResult)) {
-      // ✅ IVR asked for test code — send test code DTMF now
+      // ✅ IVR asked for test code — send test code DTMF instantly!
       await AttemptModel.addLog(attemptId, `IVR asked for test code. Transmitting 3-digit test code over DTMF: ${testCode}`);
 
       const { data: freshAttempt } = await supabase.from('attempts').select('result_details').eq('id', attemptId).single();
@@ -253,7 +251,6 @@ export const handleListenCard = async (req, res) => {
         action: `${host}/api/call/listen-code/${attemptId}?testCode=${testCode}`,
         method: 'POST'
       });
-      gather.pause({ length: 2 });
       gather.play({ digits: testCode });
       gather.pause({ length: 5 });
       twiml.redirect({ method: 'POST' }, `${host}/api/call/listen-code/${attemptId}?testCode=${testCode}`);
