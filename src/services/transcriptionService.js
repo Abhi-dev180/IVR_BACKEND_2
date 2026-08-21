@@ -110,8 +110,16 @@ if (!fs.existsSync(AUDIO_DIR)) {
       } else if (['lockout', 'exhausted_reject', 'invalid', 'voicemail'].includes(signals.outcome)) {
         await AttemptModel.updateAttemptStatus(attemptId, 'failed', 0, { ...resultDetails, error: `Outcome: ${signals.outcome}` });
       } else {
-        // Stuck or unknown outcome
-        await AttemptModel.updateAttemptStatus(attemptId, 'failed', 0, { ...resultDetails, error: `Call got stuck or unknown state reached` });
+        // Intermediate call attempt. Save transcript and recording details, but preserve queued/active status!
+        const { data: currentAttempt } = await supabase.from('attempts').select('status').eq('id', attemptId).single();
+        if (currentAttempt && (currentAttempt.status === 'queued' || currentAttempt.status === 'active')) {
+          await supabase.from('attempts').update({ 
+            result_details: { ...(currentAttempt.result_details || {}), ...resultDetails }
+          }).eq('id', attemptId);
+          await AttemptModel.addLog(attemptId, `Recording transcribed & saved. Continuing to next code...`);
+        } else {
+          await AttemptModel.updateAttemptStatus(attemptId, 'failed', 0, { ...resultDetails, error: `Call got stuck or unknown state reached` });
+        }
       }
 
     } catch (error) {
