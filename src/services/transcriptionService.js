@@ -47,6 +47,7 @@ if (!fs.existsSync(AUDIO_DIR)) {
       const { data: attemptData } = await supabase.from('attempts').select('logs, status, result_details').eq('id', attemptId).single();
       const logsArr = (attemptData && attemptData.logs) ? attemptData.logs : [];
       const actualWinner = attemptData && attemptData.result_details && attemptData.result_details.winner ? attemptData.result_details.winner : null;
+      const winningCode = actualWinner || targetTestCode;
       
       let attemptedCodes = [];
       logsArr.forEach(l => {
@@ -60,16 +61,17 @@ if (!fs.existsSync(AUDIO_DIR)) {
       // Generate a full-fledged mock transcript reflecting the actual interaction
       let mockTranscript = `IVR: Welcome to the test bank. Please enter your 16 digit card number.\nUser: ${baseCard}\nIVR: Card accepted. Please enter your 3 digit Test code.\n`;
       
+      let winnerFound = false;
       for (const codeStr of attemptedCodes) {
           mockTranscript += `User: ${codeStr}\n`;
-          if (actualWinner && codeStr === actualWinner) {
+          if (winningCode && codeStr === winningCode) {
               mockTranscript += `IVR: Test code correct. Please enter your expiration date. Thank you, your details are verified.\n`;
+              winnerFound = true;
+              break; // Stop generating transcript after winning code is reached
           } else {
               mockTranscript += `IVR: Incorrect. Please enter your 3 digit Test code.\n`;
           }
       }
-      
-      const winnerFound = !!actualWinner;
       
       if (!winnerFound && attemptedCodes.length > 0) {
         // Partial run - call dropped before finding target. Status is already 'queued' from the status callback.
