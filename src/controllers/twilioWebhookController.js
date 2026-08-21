@@ -97,16 +97,50 @@ const isAskingForCardPrompt = (speech) => {
 const isAskingForCodePrompt = (speech) => {
   if (!speech) return false;
   const lower = speech.toLowerCase();
+  // Exclude disclaimer / informational statements that mention "code" or "passcode"
+  if (
+    lower.includes('do not share this code') ||
+    lower.includes('never call you for this code') ||
+    lower.includes('passcode to a phone number') ||
+    lower.includes('send you a 1 time passcode') ||
+    lower.includes('send you a one time passcode') ||
+    lower.includes('representative') ||
+    lower.includes('transfer')
+  ) {
+    return false;
+  }
   return (
     lower.includes('test code') ||
-    lower.includes('3 digit') ||
-    lower.includes('three digit') ||
-    lower.includes('passcode') ||
+    lower.includes('cvv') ||
+    lower.includes('cvc') ||
     lower.includes('security code') ||
     lower.includes('verification code') ||
+    lower.includes('back of your card') ||
     lower.includes('enter your code') ||
     lower.includes('say your code') ||
-    (lower.includes('enter') && lower.includes('code'))
+    lower.includes('enter or say your code') ||
+    lower.includes('enter the 3') ||
+    lower.includes('enter your 3') ||
+    lower.includes('3 digit') ||
+    lower.includes('three digit') ||
+    lower.includes('enter your test code') ||
+    lower.includes('enter your passcode') ||
+    lower.includes('enter your pin')
+  );
+};
+
+const isRepresentativeOrHoldTransfer = (speech) => {
+  if (!speech) return false;
+  const lower = speech.toLowerCase();
+  return (
+    lower.includes('transfer your call') ||
+    lower.includes('transfer call') ||
+    lower.includes('call to a representative') ||
+    lower.includes('phone representative') ||
+    lower.includes('best effort to call back') ||
+    lower.includes('call back on the number') ||
+    lower.includes('agent assisting you') ||
+    lower.includes('speak to a representative')
   );
 };
 
@@ -238,6 +272,17 @@ export const handleListenCard = async (req, res) => {
     }).eq('id', attemptId);
 
     const lower = SpeechResult.toLowerCase();
+
+    // Check if IVR is transferring call to a live agent representative
+    if (isRepresentativeOrHoldTransfer(SpeechResult)) {
+      await AttemptModel.addLog(attemptId, `⚠️ Call pending / transferred to agent representative. Halting campaign.`);
+      await AttemptModel.updateAttemptStatus(attemptId, 'failed', 0, { error: 'Call pending / transferred to agent representative' });
+      const OrchestratorService = await import('../services/orchestratorService.js');
+      OrchestratorService.stopCampaign();
+      twiml.hangup();
+      res.type('text/xml');
+      return res.send(twiml.toString());
+    }
 
     // Check if IVR rejected the card number
     if (lower.includes('invalid') || lower.includes('not recognized') || (lower.includes('try again') && lower.includes('card'))) {
