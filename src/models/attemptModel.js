@@ -310,17 +310,19 @@ export const createAttempt = async (testValue, targetPhoneNumber) => {
     if (attemptErr) throw attemptErr;
 
     // If completing, failing, forcing a retry, or re-queuing a dropped call, free the phone line
-    if (['completed', 'failed', 'retry', 'queued'].includes(status) && updatedAttempt && updatedAttempt.phone_line_id) {
-      const { data: line, error: lineFetchErr } = await supabase
+    if (['completed', 'failed', 'retry', 'queued'].includes(status)) {
+      const lineId = updatedAttempt?.phone_line_id;
+      const { data: line } = await supabase
         .from('phone_lines')
-        .select('attempts_processed')
-        .eq('id', updatedAttempt.phone_line_id)
-        .single();
+        .select('id, attempts_processed')
+        .or(`current_attempt_id.eq.${attemptId}${lineId ? `,id.eq.${lineId}` : ''}`)
+        .maybeSingle();
       
-      if (!lineFetchErr && line) {
-        await PhoneLineModel.updateLineStatus(updatedAttempt.phone_line_id, 'idle', null, {
+      if (line) {
+        await PhoneLineModel.updateLineStatus(line.id, 'idle', null, {
           attempts_processed: (line.attempts_processed || 0) + 1
         });
+        console.log(`[AttemptModel] Freed Phone Line ID ${line.id} back to idle.`);
       }
     }
 
