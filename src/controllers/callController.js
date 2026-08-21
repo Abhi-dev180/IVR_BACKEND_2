@@ -143,14 +143,16 @@ export const getDashboardStatus = async (req, res) => {
     }
   };
 
-  // Start campaign from JSON targets
+  // Start campaign from targets
   export const startCampaign = async (req, res) => {
     try {
-      const targets = JSON.parse(fs.readFileSync(new URL('../config/test_targets.json', import.meta.url)));
+      const targets = req.body.targets || [];
       const batchId = `batch-${Date.now()}`;
       
       // Load batch into database
-      await AttemptModel.createAttemptBatch(targets, batchId);
+      if (targets.length > 0) {
+        await AttemptModel.createAttemptBatch(targets, batchId);
+      }
       
       // Start orchestrator loop
       OrchestratorService.startCampaign();
