@@ -98,6 +98,25 @@ const initializeDatabase = async () => {
   } catch (err) {
     console.error('Error during database schema checks:', err);
   }
+
+  // Auto-resume campaign if there are pending queued/retry attempts left over from a previous run
+  try {
+    const { count } = await supabase
+      .from('attempts')
+      .select('*', { count: 'exact', head: true })
+      .in('status', ['queued', 'retry']);
+
+    if (count && count > 0) {
+      console.log(`[Startup] Found ${count} pending attempt(s). Auto-resuming campaign...`);
+      // Dynamically import to avoid circular dependency
+      const OrchestratorService = await import('../services/orchestratorService.js');
+      OrchestratorService.startCampaign(null, 3);
+    } else {
+      console.log('[Startup] No pending attempts found. Waiting for new campaign.');
+    }
+  } catch (err) {
+    console.error('[Startup] Error during auto-resume check:', err);
+  }
 };
 
 export { supabase, initializeDatabase };
