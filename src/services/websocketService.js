@@ -10,6 +10,19 @@ export const initializeWebSocket = (server) => {
     clients.add(ws);
     console.log(`[WS] Client connected. Active clients: ${clients.size}`);
 
+    ws.on('message', (message) => {
+      try {
+        const data = JSON.parse(message);
+        if (data.type === 'ping') {
+          if (ws.readyState === 1) {
+            ws.send(JSON.stringify({ type: 'pong' }));
+          }
+        }
+      } catch (err) {
+        // Ignore non-JSON messages
+      }
+    });
+
     ws.on('close', () => {
       clients.delete(ws);
       console.log(`[WS] Client disconnected. Active clients: ${clients.size}`);
@@ -21,7 +34,18 @@ export const initializeWebSocket = (server) => {
     });
   });
 
-  console.log('[WS] WebSocket Server initialized.');
+  // Server-side heartbeat every 10 seconds to keep all proxy/Render connections alive
+  setInterval(() => {
+    if (!wss) return;
+    const pingMsg = JSON.stringify({ type: 'ping' });
+    clients.forEach((client) => {
+      if (client.readyState === 1) {
+        client.send(pingMsg);
+      }
+    });
+  }, 10000);
+
+  console.log('[WS] WebSocket Server initialized with 10s heartbeat keepalive.');
 };
 
 export const broadcast = (type, payload) => {
