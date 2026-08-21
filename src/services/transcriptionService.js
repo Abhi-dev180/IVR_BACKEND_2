@@ -30,6 +30,24 @@ if (!fs.existsSync(AUDIO_DIR)) {
       await downloadFile(recordingUrl, localFilePath);
       await AttemptModel.addLog(attemptId, `Recording saved locally to: ${path.basename(localFilePath)}`);
 
+      // Fetch attempt data for card, target code, logs and result details
+      const { supabase } = await import('../config/db.js');
+      const { data: attempt } = await supabase.from('attempts').select('test_value, target_test_code').eq('id', attemptId).single();
+      const baseCard = attempt && attempt.test_value ? attempt.test_value.split(':')[0] : '1234567890123456';
+      const targetTestCode = attempt && attempt.target_test_code ? attempt.target_test_code : '003';
+      
+      const { data: attemptData } = await supabase.from('attempts').select('logs, status, result_details').eq('id', attemptId).single();
+      const logsArr = (attemptData && attemptData.logs) ? attemptData.logs : [];
+      const actualWinner = attemptData && attemptData.result_details && attemptData.result_details.winner ? attemptData.result_details.winner : null;
+      const winningCode = actualWinner || targetTestCode;
+      
+      let attemptedCodes = [];
+      logsArr.forEach(l => {
+          const match = l.match(/DTMF Sent: \d{16}:(\d{3})/);
+          if (match) attemptedCodes.push(match[1]);
+      });
+      attemptedCodes = [...new Set(attemptedCodes)];
+
       // 2. Transcribe real audio recording using Speech-to-Text API if configured
       let transcript = '';
       const apiKey = process.env.OPENAI_API_KEY;
@@ -43,10 +61,10 @@ if (!fs.existsSync(AUDIO_DIR)) {
             await AttemptModel.addLog(attemptId, `Real Audio Speech Transcript: "${transcript}"`);
           }
         } catch (apiErr) {
-          console.warn(`[TranscriptionService] OpenAI Whisper failed: ${apiErr.message}. Falling back to dialogue sequence.`);
+          console.warn(`[TranscriptionService] OpenAI Whisper failed: ${apiErr.message}.`);
           await AttemptModel.addLog(attemptId, `OpenAI Whisper notice: ${apiErr.message}`);
         }
-      } else if (whisperServer && whisperServer.trim() !== '') {
+      } else if (whisperServer && whisperServer.trim() !== '' && whisperServer.includes('localhost:5001')) {
         try {
           await AttemptModel.addLog(attemptId, `Transcribing audio recording via Whisper server (${whisperServer})...`);
           transcript = await transcribeLocalWhisperServer(localFilePath, whisperServer);
@@ -59,37 +77,6 @@ if (!fs.existsSync(AUDIO_DIR)) {
       }
 
       if (!transcript || transcript.trim() === '') {
-        await AttemptModel.addLog(attemptId, 'Speech-to-Text API key not set. Using target IVR flow dialogue transcript.');
-        
-        // Fetch the attempt to get the exact 16 digit card number and the target Test code
-        const { supabase } = await import('../config/db.js');
-        const { data: attempt } = await supabase.from('attempts').select('test_value, target_test_code').eq('id', attemptId).single();
-        const baseCard = attempt && attempt.test_value ? attempt.test_value.split(':')[0] : '1234567890123456';
-        const targetTestCode = attempt && attempt.target_test_code ? attempt.target_test_code : '003';
-        
-        // Fetch the attempt logs (stored as a JSON array in attempts.logs column)
-        const { data: attemptData } = await supabase.from('attempts').select('logs, status, result_details').eq('id', attemptId).single();
-        const logsArr = (attemptData && attemptData.logs) ? attemptData.logs : [];
-        const actualWinner = attemptData && attemptData.result_details && attemptData.result_details.winner ? attemptData.result_details.winner : null;
-        const winningCode = actualWinner || targetTestCode;
-        
-        let attemptedCodes = [];
-        logsArr.forEach(l => {
-            const match = l.match(/DTMF Sent: \d{16}:(\d{3})/);
-            if (match) attemptedCodes.push(match[1]);
-        });
-        
-        // For the winning attempt, compile the complete sequence from 001 up to winningCode
-        if (winningCode && !isNaN(parseInt(winningCode, 10))) {
-          const winningNum = parseInt(winningCode, 10);
-          attemptedCodes = [];
-          for (let i = 1; i <= winningNum; i++) {
-            attemptedCodes.push(i.toString().padStart(3, '0'));
-          }
-        } else {
-          attemptedCodes = [...new Set(attemptedCodes)];
-        }
-        
         // Compile pure sequence of DTMF events from logs
         let sequenceTranscript = `DTMF Transmitted: ${baseCard}\n`;
         for (const codeStr of attemptedCodes) {
@@ -101,7 +88,6 @@ if (!fs.existsSync(AUDIO_DIR)) {
       const isWinner = actualWinner && attemptedCodes.includes(actualWinner);
       
       if (!isWinner && attemptedCodes.length > 0) {
-        // Partial run - call dropped before finding target. Status is already 'queued' from the status callback.
         if (attemptData && attemptData.status === 'queued') {
             await AttemptModel.addLog(attemptId, `Recording saved (${attemptedCodes.length} codes tried, target not yet found). Continuing to next code...`);
             return;
