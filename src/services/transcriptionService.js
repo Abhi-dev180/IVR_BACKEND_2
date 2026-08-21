@@ -77,12 +77,19 @@ if (!fs.existsSync(AUDIO_DIR)) {
       }
 
       if (!transcript || transcript.trim() === '') {
-        // Aggregate real live speech logs and DTMF events from actual call (0% mock text!)
-        const realEvents = logsArr.filter(l => l.includes('Twilio Live Speech') || l.includes('Transmitting') || l.includes('DTMF Sent'));
-        if (realEvents.length > 0) {
-          transcript = realEvents.join('\n');
+        // First priority: use the live dialogue transcript already built during the call (IVR/User format)
+        const liveTranscript = attemptData?.result_details?.transcript || '';
+        if (liveTranscript && liveTranscript.trim() !== '') {
+          transcript = liveTranscript;
         } else {
-          transcript = 'No spoken speech captured in recording.';
+          // Fallback: aggregate real IVR speech events from execution logs
+          const realEvents = logsArr
+            .filter(l => l.includes('IVR (') || l.includes('User (DTMF)'))
+            .map(l => {
+              // Strip timestamp prefix like "[2026-08-21T05:58:03.954Z] "
+              return l.replace(/^\[[\d\-T:.Z]+\]\s*/, '');
+            });
+          transcript = realEvents.length > 0 ? realEvents.join('\n') : 'No spoken speech captured in recording.';
         }
       }
       

@@ -40,6 +40,7 @@ const getTwilioClient = () => {
 };
 
 let isCampaignRunning = false;
+let isTickRunning = false; // Mutex to prevent double-call race condition
 let workerInterval = null;
 let maxRetries = 3;
 
@@ -59,10 +60,14 @@ export const startCampaign = async (phoneNumberId, maxRetriesVal = 3) => {
     
     // Run the orchestrator loop
     workerInterval = setInterval(async () => {
+      if (isTickRunning) return; // Skip if previous tick still running
+      isTickRunning = true;
       try {
         await tick();
       } catch (err) {
         console.error('[Orchestrator] Error in worker tick:', err);
+      } finally {
+        isTickRunning = false;
       }
     }, 2000);
 };
