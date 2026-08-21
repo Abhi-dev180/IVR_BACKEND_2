@@ -107,20 +107,14 @@ export const getDashboardStatus = async (req, res) => {
 
       fs.appendFileSync('update_log.txt', debugLog + '\n');
 
-      // Create individual target attempt rows for each code (001, 002, 003...)
-      const batchCount = parseInt(req.body.batchCount) || 50;
+      // Create ONLY 1 initial attempt row for the first test code (e.g., 001)
       const startCode = parseInt(req.body.startCode) || 1;
-      const targets = [];
-      
-      for (let i = startCode; i < startCode + batchCount; i++) {
-        if (i > 999) break;
-        const codeStr = i.toString().padStart(3, '0');
-        targets.push({
-          phone_number: req.body.toPhoneNumber || '+18009838472',
-          test_value: `${sixteenDigit}:${codeStr}`,
-          target_test_code: randomTestCode
-        });
-      }
+      const firstCodeStr = startCode.toString().padStart(3, '0');
+      const targets = [{
+        phone_number: req.body.toPhoneNumber || '+18009838472',
+        test_value: `${sixteenDigit}:${firstCodeStr}`,
+        target_test_code: randomTestCode
+      }];
       
       // Auto-configure the Test IVR via Supabase
       const { supabase } = await import('../config/db.js');

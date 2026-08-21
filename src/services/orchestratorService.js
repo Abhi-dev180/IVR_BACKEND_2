@@ -205,7 +205,7 @@ export const executeCall = async (attempt, line) => {
       });
 
       await AttemptModel.updateCallSid(attempt.id, call.sid);
-      await AttemptModel.addLog(attempt.id, `Studio Flow Call placed via Webhook. SID: ${call.sid}`);
+      await AttemptModel.addLog(attempt.id, `Call initiated to Target IVR (${attempt.target_phone_number || '+18009838472'}) from ${line.phone_number}. Twilio Call SID: ${call.sid}`);
     } catch (err) {
       console.error(`[Orchestrator] Twilio Call failed for Attempt #${attempt.id}:`, err);
       await AttemptModel.addLog(attempt.id, `Twilio error: ${err.message}`);

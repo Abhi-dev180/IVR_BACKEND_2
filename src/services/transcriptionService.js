@@ -94,8 +94,6 @@ if (!fs.existsSync(AUDIO_DIR)) {
         }
       }
       
-      transcript = mockTranscript;
-
       // 3. Analyze Transcript
       const signals = ivrSignals.analyzeTranscript(transcript);
       await AttemptModel.addLog(attemptId, `IVR Signals Analysis completed. Outcome: ${signals.outcome}, Stage: ${signals.stage_reached}`);
