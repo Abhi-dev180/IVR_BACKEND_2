@@ -77,21 +77,24 @@ export const handleListenGreeting = async (req, res) => {
   const baseCard = attempt && attempt.test_value ? attempt.test_value.split(':')[0] : '';
   const testCode = attempt && attempt.test_value && attempt.test_value.includes(':') ? attempt.test_value.split(':')[1] : '001';
 
+  // Build transcript incrementally (always read fresh from DB to avoid stale data)
+  let currentTranscript = attempt?.result_details?.transcript || '';
+
   // Log real IVR greeting speech
   if (SpeechResult && SpeechResult.trim() !== '') {
     await AttemptModel.addLog(attemptId, `IVR (Greeting): "${SpeechResult}"`);
-    const existing = attempt?.result_details?.transcript || '';
+    currentTranscript = currentTranscript ? `${currentTranscript}\nIVR: ${SpeechResult}` : `IVR: ${SpeechResult}`;
     await supabase.from('attempts').update({
-      result_details: { ...(attempt?.result_details || {}), transcript: existing ? `${existing}\nIVR: ${SpeechResult}` : `IVR: ${SpeechResult}` }
+      result_details: { ...(attempt?.result_details || {}), transcript: currentTranscript }
     }).eq('id', attemptId);
   }
 
   await AttemptModel.addLog(attemptId, `Transmitting 16-digit card number over DTMF: ${baseCard}`);
 
-  // Add to transcript: User action
-  const existingT = attempt?.result_details?.transcript || '';
+  // Add User DTMF action to transcript
+  currentTranscript = currentTranscript ? `${currentTranscript}\nUser (DTMF): ${baseCard}` : `User (DTMF): ${baseCard}`;
   await supabase.from('attempts').update({
-    result_details: { ...(attempt?.result_details || {}), transcript: existingT ? `${existingT}\nUser (DTMF): ${baseCard}` : `User (DTMF): ${baseCard}` }
+    result_details: { ...(attempt?.result_details || {}), transcript: currentTranscript }
   }).eq('id', attemptId);
 
   const twiml = new twilio.twiml.VoiceResponse();
@@ -123,21 +126,25 @@ export const handleListenCard = async (req, res) => {
   const testCode = req.query.testCode || req.body.testCode || '001';
   const host = process.env.SERVER_URL || `${req.protocol}://${req.get('host')}`;
 
+  // Always re-fetch from DB to get freshest transcript
   const { data: attempt } = await supabase.from('attempts').select('test_value, target_test_code, result_details').eq('id', attemptId).single();
+  let currentTranscript = attempt?.result_details?.transcript || '';
 
   // Log real IVR card response speech
   if (SpeechResult && SpeechResult.trim() !== '') {
     await AttemptModel.addLog(attemptId, `IVR (Card Response): "${SpeechResult}"`);
-    const existing = attempt?.result_details?.transcript || '';
+    currentTranscript = currentTranscript ? `${currentTranscript}\nIVR: ${SpeechResult}` : `IVR: ${SpeechResult}`;
     await supabase.from('attempts').update({
-      result_details: { ...(attempt?.result_details || {}), transcript: existing ? `${existing}\nIVR: ${SpeechResult}` : `IVR: ${SpeechResult}` }
+      result_details: { ...(attempt?.result_details || {}), transcript: currentTranscript }
     }).eq('id', attemptId);
 
     // If card was rejected by IVR, halt campaign
     const lower = SpeechResult.toLowerCase();
-    if (lower.includes('invalid') || lower.includes('not recognized') || lower.includes('try again') && lower.includes('card')) {
+    if (lower.includes('invalid') || lower.includes('not recognized') || (lower.includes('try again') && lower.includes('card'))) {
       await AttemptModel.addLog(attemptId, `❌ 16-digit card number rejected by Target IVR. Halting campaign.`);
       await AttemptModel.updateAttemptStatus(attemptId, 'failed', 0, { error: 'Card rejected by Target IVR' });
+      const OrchestratorService = await import('../services/orchestratorService.js');
+      OrchestratorService.stopCampaign();
       const twiml = new twilio.twiml.VoiceResponse();
       twiml.hangup();
       res.type('text/xml');
@@ -147,10 +154,12 @@ export const handleListenCard = async (req, res) => {
 
   await AttemptModel.addLog(attemptId, `Transmitting 3-digit test code over DTMF: ${testCode}`);
 
-  // Update transcript with User action
-  const existingT = attempt?.result_details?.transcript || '';
+  // Re-fetch fresh transcript before adding user DTMF action
+  const { data: freshAttempt } = await supabase.from('attempts').select('result_details').eq('id', attemptId).single();
+  let freshTranscript = freshAttempt?.result_details?.transcript || currentTranscript;
+  freshTranscript = freshTranscript ? `${freshTranscript}\nUser (DTMF): ${testCode}` : `User (DTMF): ${testCode}`;
   await supabase.from('attempts').update({
-    result_details: { ...(attempt?.result_details || {}), transcript: existingT ? `${existingT}\nUser (DTMF): ${testCode}` : `User (DTMF): ${testCode}` }
+    result_details: { ...(freshAttempt?.result_details || attempt?.result_details || {}), transcript: freshTranscript }
   }).eq('id', attemptId);
 
   const twiml = new twilio.twiml.VoiceResponse();
@@ -261,6 +270,7 @@ export const handleStudioWebhook = async (req, res) => {
     } else if (flow_status === 'failed_invalid_card') {
       await AttemptModel.updateAttemptStatus(attemptId, 'failed', 0, { error: 'Studio Flow rejected the 16-digit card number' });
       await AttemptModel.addLog(attemptId, `❌ 16-digit card number rejected by Target IVR. Halting campaign.`);
+      const OrchestratorService = await import('../services/orchestratorService.js');
       OrchestratorService.stopCampaign();
     }
     
