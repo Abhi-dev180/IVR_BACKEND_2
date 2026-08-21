@@ -1,2 +1,6 @@
 node_modules/
 .env
+audio_files/
+data/
+*.mp3
+*.wav
