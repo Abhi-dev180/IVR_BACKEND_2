@@ -82,10 +82,20 @@ export const stopCampaign = async () => {
     }
     broadcast('campaign_status', { running: false });
     console.log('[Orchestrator] Campaign stopped.');
-    
+
+    // Force reset all phone lines back to idle in DB
+    try {
+      await supabase
+        .from('phone_lines')
+        .update({ status: 'idle', current_attempt_id: null })
+        .neq('id', 0);
+    } catch (err) {
+      console.error('[Orchestrator] Error resetting phone lines on stop:', err);
+    }
+
     // Hang up all active calls immediately
     await terminateActiveCalls();
-    
+
     // Cancel any pending attempts so they don't block the next run
     await cancelPendingAttempts();
 };

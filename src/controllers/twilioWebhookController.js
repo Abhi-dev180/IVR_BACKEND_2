@@ -123,6 +123,17 @@ const formatDtmfHumanDialpad = (cardDigits) => {
 // Stage 2: IVR greeting captured. Send card DTMF ONLY when IVR asks for card number.
 export const handleListenGreeting = async (req, res) => {
   const { attemptId } = req.params;
+  const OrchestratorService = await import('../services/orchestratorService.js');
+
+  // Immediately hang up if campaign has been stopped by operator
+  if (!OrchestratorService.isRunning()) {
+    console.log(`[handleListenGreeting] Campaign stopped. Hanging up Attempt #${attemptId}.`);
+    const twiml = new twilio.twiml.VoiceResponse();
+    twiml.hangup();
+    res.type('text/xml');
+    return res.send(twiml.toString());
+  }
+
   const { SpeechResult } = req.body || {};
   const host = process.env.SERVER_URL || `${req.protocol}://${req.get('host')}`;
 
@@ -197,6 +208,17 @@ export const handleListenGreeting = async (req, res) => {
 // Stage 3: IVR card response captured. Send test code DTMF ONLY when IVR asks for code.
 export const handleListenCard = async (req, res) => {
   const { attemptId } = req.params;
+  const OrchestratorService = await import('../services/orchestratorService.js');
+
+  // Immediately hang up if campaign has been stopped by operator
+  if (!OrchestratorService.isRunning()) {
+    console.log(`[handleListenCard] Campaign stopped. Hanging up Attempt #${attemptId}.`);
+    const twiml = new twilio.twiml.VoiceResponse();
+    twiml.hangup();
+    res.type('text/xml');
+    return res.send(twiml.toString());
+  }
+
   const { SpeechResult } = req.body || {};
   const testCode = req.query.testCode || req.body.testCode || '001';
   const host = process.env.SERVER_URL || `${req.protocol}://${req.get('host')}`;
@@ -429,8 +451,9 @@ export const handleStatusCallback = async (req, res) => {
           await AttemptModel.updateAttemptStatus(attemptId, 'failed', duration, { twilioStatus: CallStatus, error: 'Incorrect test code' });
           await AttemptModel.addLog(attemptId, `Attempt #${attemptId} completed. Line freed for next attempt.`);
 
-          // Dynamically queue ONLY the 1 next attempt row for the next code!
-          if (attempt && attempt.test_value && attempt.test_value.includes(':')) {
+          // Dynamically queue ONLY the 1 next attempt row if campaign is still running!
+          const OrchestratorService = await import('../services/orchestratorService.js');
+          if (OrchestratorService.isRunning() && attempt && attempt.test_value && attempt.test_value.includes(':')) {
             const parts = attempt.test_value.split(':');
             const baseCard = parts[0];
             const currentCodeNum = parseInt(parts[1], 10);
@@ -453,14 +476,17 @@ export const handleStatusCallback = async (req, res) => {
         await AttemptModel.updateAttemptStatus(attemptId, 'failed', duration, { error: `Call failed with status: ${CallStatus}` });
         await AttemptModel.addLog(attemptId, `Attempt #${attemptId} encountered ${CallStatus}. Line freed for next attempt.`);
 
-        // Re-queue 1 single attempt for the same code if call was blocked/busy
-        const { data: attempt } = await supabase.from('attempts').select('batch_id, target_phone_number, test_value, target_test_code').eq('id', attemptId).single();
-        if (attempt && attempt.test_value) {
-          await AttemptModel.createAttemptBatch([{
-            phone_number: attempt.target_phone_number || '+18009838472',
-            test_value: attempt.test_value,
-            target_test_code: attempt.target_test_code
-          }], attempt.batch_id);
+        // Re-queue 1 single attempt for the same code ONLY if campaign is still running
+        const OrchestratorService = await import('../services/orchestratorService.js');
+        if (OrchestratorService.isRunning()) {
+          const { data: attempt } = await supabase.from('attempts').select('batch_id, target_phone_number, test_value, target_test_code').eq('id', attemptId).single();
+          if (attempt && attempt.test_value) {
+            await AttemptModel.createAttemptBatch([{
+              phone_number: attempt.target_phone_number || '+18009838472',
+              test_value: attempt.test_value,
+              target_test_code: attempt.target_test_code
+            }], attempt.batch_id);
+          }
         }
       }
     }
