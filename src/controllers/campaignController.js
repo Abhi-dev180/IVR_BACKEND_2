@@ -110,16 +110,18 @@ export const getDashboardStatus = async (req, res) => {
       const { supabase } = await import('../config/db.js');
       let startCodeNum = parseInt(req.body.startCode) || 1;
 
-      // Tiered sequential allocation per 16-digit card number (001-020, 021-040, etc.)
+      // Tiered 20-code batch allocation per unique 16-digit card number (001-020, 021-040, 041-060, etc.)
       const { data: existingAttempts } = await supabase
         .from('attempts')
-        .select('test_value')
+        .select('test_value, result_details')
         .like('test_value', `${sixteenDigit}:%`);
 
       if (existingAttempts && existingAttempts.length > 0) {
         let maxCode = 0;
         existingAttempts.forEach(row => {
-          if (row.test_value && row.test_value.includes(':')) {
+          if (row.result_details?.codeTestedInCall && row.result_details?.highestCodeNumTested) {
+            if (row.result_details.highestCodeNumTested > maxCode) maxCode = row.result_details.highestCodeNumTested;
+          } else if (row.test_value && row.test_value.includes(':')) {
             const code = parseInt(row.test_value.split(':')[1], 10);
             if (!isNaN(code) && code > maxCode) maxCode = code;
           }
