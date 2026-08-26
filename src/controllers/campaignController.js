@@ -2,6 +2,7 @@ import twilio from 'twilio';
 import * as AttemptModel from '../models/attemptModel.js';
 import * as PhoneLineModel from '../models/phoneLineModel.js';
 import * as OrchestratorService from '../services/orchestratorService.js';
+import * as MultiCallOrchestratorService from '../services/multiCallOrchestratorService.js';
 import { supabase } from '../config/db.js';
 import fs from 'fs';
 
@@ -13,6 +14,7 @@ export const getDashboardStatus = async (req, res) => {
     const lines = await PhoneLineModel.getAllPhoneLines();
     const attempts = await AttemptModel.getAttempts();
     const campaignRunning = OrchestratorService.isRunning();
+    const multiCampaignRunning = MultiCallOrchestratorService.isMultiCallRunning;
 
     // Augment busy lines with the target number they are currently calling
     lines.forEach(line => {
@@ -24,7 +26,14 @@ export const getDashboardStatus = async (req, res) => {
       }
     });
 
-    return res.status(200).json({ lines, attempts, campaignRunning });
+    return res.status(200).json({
+      lines,
+      attempts,
+      campaignRunning,
+      singleCampaignRunning: campaignRunning,
+      multiCampaignRunning,
+      anyCampaignRunning: campaignRunning || multiCampaignRunning
+    });
   } catch (error) {
     console.error('Error fetching dashboard status:', error);
     return res.status(500).json({ error: error.message });

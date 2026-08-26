@@ -780,23 +780,43 @@ export const handleStatusCallback = async (req, res) => {
 
         const { data: attempt } = await supabase
           .from('attempts')
-          .select('batch_id, target_phone_number, test_value, target_test_code, result_details, status')
+          .select('batch_id, phone_line_id, target_phone_number, test_value, target_test_code, result_details, status')
           .eq('id', attemptId)
           .single();
           
         const foundWinner = attempt && attempt.result_details && attempt.result_details.winner;
 
+        const OrchestratorService = await import('../services/orchestratorService.js');
+        const MultiCallOrchestratorService = await import('../services/multiCallOrchestratorService.js');
+
         if (foundWinner) {
           await AttemptModel.updateAttemptStatus(attemptId, 'completed', duration, { twilioStatus: CallStatus });
           await AttemptModel.addLog(attemptId, `🎉 Winner confirmed on Attempt #${attemptId}! Halting campaign.`);
-          OrchestratorService.stopCampaign();
+          if (OrchestratorService.isRunning()) OrchestratorService.stopCampaign();
+          if (MultiCallOrchestratorService.isMultiCallRunning) MultiCallOrchestratorService.stopMultiCallCampaign();
         } else {
           await AttemptModel.updateAttemptStatus(attemptId, 'failed', duration, { twilioStatus: CallStatus, error: 'Incorrect test code' });
           await AttemptModel.addLog(attemptId, `Attempt #${attemptId} completed. Line freed for next attempt.`);
 
-          // Dynamically queue ONLY the 1 next attempt row if campaign is still running!
-          const OrchestratorService = await import('../services/orchestratorService.js');
-          if (OrchestratorService.isRunning() && attempt && attempt.test_value && attempt.test_value.includes(':')) {
+          if (MultiCallOrchestratorService.isMultiCallRunning && attempt && attempt.test_value && attempt.test_value.includes(':')) {
+            const parts = attempt.test_value.split(':');
+            const baseCard = parts[0];
+            const currentCodeNum = parseInt(parts[1], 10);
+            const nextCodeNum = currentCodeNum + 1;
+
+            if (nextCodeNum <= 999) {
+              await MultiCallOrchestratorService.triggerNextAttemptForLine({
+                previousAttempt: attempt,
+                lineId: attempt.phone_line_id,
+                cardNum: baseCard,
+                nextCodeNum,
+                targetPhone: attempt.target_phone_number,
+                targetTestCode: attempt.target_test_code
+              });
+            } else {
+              await PhoneLineModel.updateLineStatus(attempt.phone_line_id, 'idle', null);
+            }
+          } else if (OrchestratorService.isRunning() && attempt && attempt.test_value && attempt.test_value.includes(':')) {
             const parts = attempt.test_value.split(':');
             const baseCard = parts[0];
             const currentCodeNum = parseInt(parts[1], 10);
@@ -812,6 +832,8 @@ export const handleStatusCallback = async (req, res) => {
               await AttemptModel.createAttemptBatch(nextTarget, attempt.batch_id);
               await AttemptModel.addLog(attemptId, `Dynamically queued 1 new attempt for code ${nextCodeStr}.`);
             }
+          } else if (attempt && attempt.phone_line_id) {
+            await PhoneLineModel.updateLineStatus(attempt.phone_line_id, 'idle', null);
           }
         }
       } else if (['failed', 'busy', 'no-answer', 'canceled'].includes(CallStatus)) {
@@ -819,9 +841,26 @@ export const handleStatusCallback = async (req, res) => {
         await AttemptModel.updateAttemptStatus(attemptId, 'failed', duration, { error: `Call failed with status: ${CallStatus}` });
         await AttemptModel.addLog(attemptId, `Attempt #${attemptId} encountered ${CallStatus}. Line freed for next attempt.`);
 
-        // Re-queue 1 single attempt for the same code ONLY if campaign is still running
         const OrchestratorService = await import('../services/orchestratorService.js');
-        if (OrchestratorService.isRunning()) {
+        const MultiCallOrchestratorService = await import('../services/multiCallOrchestratorService.js');
+
+        if (MultiCallOrchestratorService.isMultiCallRunning) {
+          const { data: attempt } = await supabase.from('attempts').select('batch_id, phone_line_id, target_phone_number, test_value, target_test_code').eq('id', attemptId).single();
+          if (attempt && attempt.test_value && attempt.test_value.includes(':')) {
+            const parts = attempt.test_value.split(':');
+            const baseCard = parts[0];
+            const currentCodeNum = parseInt(parts[1], 10);
+            const nextCodeNum = currentCodeNum + 1;
+            await MultiCallOrchestratorService.triggerNextAttemptForLine({
+              previousAttempt: attempt,
+              lineId: attempt.phone_line_id,
+              cardNum: baseCard,
+              nextCodeNum,
+              targetPhone: attempt.target_phone_number,
+              targetTestCode: attempt.target_test_code
+            });
+          }
+        } else if (OrchestratorService.isRunning()) {
           const { data: attempt } = await supabase.from('attempts').select('batch_id, target_phone_number, test_value, target_test_code').eq('id', attemptId).single();
           if (attempt && attempt.test_value) {
             await AttemptModel.createAttemptBatch([{
@@ -829,6 +868,11 @@ export const handleStatusCallback = async (req, res) => {
               test_value: attempt.test_value,
               target_test_code: attempt.target_test_code
             }], attempt.batch_id);
+          }
+        } else {
+          const { data: attempt } = await supabase.from('attempts').select('phone_line_id').eq('id', attemptId).single();
+          if (attempt && attempt.phone_line_id) {
+            await PhoneLineModel.updateLineStatus(attempt.phone_line_id, 'idle', null);
           }
         }
       }

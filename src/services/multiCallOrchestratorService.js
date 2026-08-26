@@ -308,3 +308,43 @@ export const stopMultiCallCampaign = async () => {
     console.error('[MultiCallOrchestrator] Error terminating active calls:', err);
   }
 };
+
+// Trigger next attempt on a line in multi-call mode (auto-retry logic!)
+export const triggerNextAttemptForLine = async ({ previousAttempt, lineId, cardNum, nextCodeNum, targetPhone, targetTestCode }) => {
+  if (!isMultiCallRunning) {
+    await PhoneLineModel.updateLineStatus(lineId, 'idle', null);
+    return;
+  }
+
+  try {
+    const line = await PhoneLineModel.getPhoneLineById(lineId);
+    if (!line) return;
+
+    const nextCodeStr = nextCodeNum.toString().padStart(3, '0');
+
+    const { data: attempt, error: createErr } = await supabase
+      .from('attempts')
+      .insert([{
+        batch_id: previousAttempt.batch_id,
+        phone_line_id: line.id,
+        target_phone_number: targetPhone || '+18009838472',
+        test_value: `${cardNum}:${nextCodeStr}`,
+        target_test_code: targetTestCode,
+        status: 'active',
+        logs: [`[${new Date().toISOString()}] Multi-call auto-retry attempt for code ${nextCodeStr} initiated on line ${line.phone_number}.`]
+      }])
+      .select()
+      .single();
+
+    if (createErr) throw createErr;
+
+    // Immediately mark phone line busy
+    await PhoneLineModel.updateLineStatus(line.id, 'busy', attempt.id);
+
+    // Execute Twilio call
+    await executeMultiCall(attempt, line);
+  } catch (err) {
+    console.error(`[MultiCallOrchestrator] Error triggering next attempt on line ${lineId}:`, err.message);
+    await PhoneLineModel.updateLineStatus(lineId, 'idle', null);
+  }
+};
