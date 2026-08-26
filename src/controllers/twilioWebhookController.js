@@ -3,14 +3,14 @@ import * as AttemptModel from '../models/attemptModel.js';
 import * as transcriptionService from '../services/transcriptionService.js';
 import { supabase } from '../config/db.js';
 
-// Dynamic host helper: prefers incoming HTTP request host header, falls back to https://ivr-backend-2.onrender.com
+// Dynamic host helper: prefers incoming HTTP request host header, falls back to process.env.SERVER_URL
 const getHost = (req) => {
   const proto = req.get('x-forwarded-proto') || req.protocol || 'https';
-  let reqHost = req.get('x-forwarded-host') || req.get('host');
-  if (reqHost && !reqHost.includes('kpn9')) {
+  const reqHost = req.get('x-forwarded-host') || req.get('host');
+  if (reqHost) {
     return `${proto}://${reqHost}`;
   }
-  return 'https://ivr-backend-2.onrender.com';
+  return process.env.SERVER_URL || 'https://ivr-backend-2.onrender.com';
 };
 
 // Generate TwiML for when the call is answered (Outbound Automated QA Flow)
