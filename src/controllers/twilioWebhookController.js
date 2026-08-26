@@ -3,6 +3,16 @@ import * as AttemptModel from '../models/attemptModel.js';
 import * as transcriptionService from '../services/transcriptionService.js';
 import { supabase } from '../config/db.js';
 
+// Dynamic host helper: prefers incoming HTTP request host header, falls back to https://ivr-backend-2.onrender.com
+const getHost = (req) => {
+  const proto = req.get('x-forwarded-proto') || req.protocol || 'https';
+  let reqHost = req.get('x-forwarded-host') || req.get('host');
+  if (reqHost && !reqHost.includes('kpn9')) {
+    return `${proto}://${reqHost}`;
+  }
+  return 'https://ivr-backend-2.onrender.com';
+};
+
 // Generate TwiML for when the call is answered (Outbound Automated QA Flow)
 export const getTwiML = async (req, res) => {
   const { attemptId } = req.params;
@@ -18,7 +28,7 @@ export const getTwiML = async (req, res) => {
     }
 
     const twiml = new twilio.twiml.VoiceResponse();
-    const host = process.env.SERVER_URL || `${req.protocol}://${req.get('host')}`;
+    const host = getHost(req);
 
     let card = attempt.test_value;
     let testCode = '';
@@ -257,7 +267,7 @@ export const handleListenCard = async (req, res) => {
 
   const { SpeechResult } = req.body || {};
   const testCode = req.query.testCode || req.body.testCode || '001';
-  const host = process.env.SERVER_URL || `${req.protocol}://${req.get('host')}`;
+  const host = getHost(req);
 
   const { data: attempt } = await supabase.from('attempts').select('test_value, target_test_code, result_details').eq('id', attemptId).single();
   const baseCard = attempt && attempt.test_value ? attempt.test_value.split(':')[0] : '';

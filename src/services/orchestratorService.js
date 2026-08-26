@@ -199,7 +199,10 @@ export const tick = async () => {
 };
 
 export const executeCall = async (attempt, line) => {
-    const host = process.env.SERVER_URL || 'http://localhost:5000';
+    let host = process.env.SERVER_URL || 'https://ivr-backend-2.onrender.com';
+    if (!host || host.includes('kpn9') || host.includes('localhost')) {
+      host = 'https://ivr-backend-2.onrender.com';
+    }
     const client = getTwilioClient();
 
     if (!client) {
