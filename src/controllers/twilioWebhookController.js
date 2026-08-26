@@ -167,11 +167,10 @@ const formatDtmfHumanDialpad = (cardDigits) => {
 // Stage 2: IVR greeting captured. Send card DTMF ONLY when IVR asks for card number.
 export const handleListenGreeting = async (req, res) => {
   const { attemptId } = req.params;
-  const OrchestratorService = await import('../services/orchestratorService.js');
+  const { data: attempt } = await supabase.from('attempts').select('status, test_value, target_test_code, result_details').eq('id', attemptId).single();
 
-  // Immediately hang up if campaign has been stopped by operator
-  if (!OrchestratorService.isRunning()) {
-    console.log(`[handleListenGreeting] Campaign stopped. Hanging up Attempt #${attemptId}.`);
+  if (attempt && (attempt.status === 'canceled' || attempt.status === 'failed')) {
+    console.log(`[handleListenGreeting] Attempt #${attemptId} is ${attempt.status}. Hanging up.`);
     const twiml = new twilio.twiml.VoiceResponse();
     twiml.hangup();
     res.type('text/xml');
@@ -179,9 +178,8 @@ export const handleListenGreeting = async (req, res) => {
   }
 
   const { SpeechResult } = req.body || {};
-  const host = process.env.SERVER_URL || `${req.protocol}://${req.get('host')}`;
+  const host = getHost(req);
 
-  const { data: attempt } = await supabase.from('attempts').select('test_value, target_test_code, result_details').eq('id', attemptId).single();
   const baseCard = attempt && attempt.test_value ? attempt.test_value.split(':')[0] : '';
   const testCode = attempt && attempt.test_value && attempt.test_value.includes(':') ? attempt.test_value.split(':')[1] : '001';
 
@@ -254,11 +252,10 @@ export const handleListenGreeting = async (req, res) => {
 // Stage 3: IVR card response captured. Send test code DTMF ONLY when IVR asks for code.
 export const handleListenCard = async (req, res) => {
   const { attemptId } = req.params;
-  const OrchestratorService = await import('../services/orchestratorService.js');
+  const { data: attempt } = await supabase.from('attempts').select('status, test_value, target_test_code, result_details').eq('id', attemptId).single();
 
-  // Immediately hang up if campaign has been stopped by operator
-  if (!OrchestratorService.isRunning()) {
-    console.log(`[handleListenCard] Campaign stopped. Hanging up Attempt #${attemptId}.`);
+  if (attempt && (attempt.status === 'canceled' || attempt.status === 'failed')) {
+    console.log(`[handleListenCard] Attempt #${attemptId} is ${attempt.status}. Hanging up.`);
     const twiml = new twilio.twiml.VoiceResponse();
     twiml.hangup();
     res.type('text/xml');
@@ -269,7 +266,6 @@ export const handleListenCard = async (req, res) => {
   const testCode = req.query.testCode || req.body.testCode || '001';
   const host = getHost(req);
 
-  const { data: attempt } = await supabase.from('attempts').select('test_value, target_test_code, result_details').eq('id', attemptId).single();
   const baseCard = attempt && attempt.test_value ? attempt.test_value.split(':')[0] : '';
   let currentTranscript = attempt?.result_details?.transcript || '';
   const twiml = new twilio.twiml.VoiceResponse();
