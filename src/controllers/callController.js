@@ -169,11 +169,115 @@ export const getDashboardStatus = async (req, res) => {
     try {
       OrchestratorService.stopCampaign();
       return res.status(200).json({ message: 'Campaign stopped successfully.' });
-    } catch (error) {
-      console.error('Error stopping campaign:', error);
-      return res.status(500).json({ error: error.message });
+// Local recordings directory setup
+const RECORDINGS_DIR = path.resolve(process.cwd(), 'recordings');
+if (!fs.existsSync(RECORDINGS_DIR)) {
+  fs.mkdirSync(RECORDINGS_DIR, { recursive: true });
+}
+
+// Helper to fetch and cache audio recording to local disk
+export const cacheAudioToDisk = async (attemptId, recordingUrl) => {
+  const localFilePath = path.join(RECORDINGS_DIR, `attempt_${attemptId}.mp3`);
+  if (fs.existsSync(localFilePath)) return localFilePath;
+
+  let accountSid = process.env.TWILIO_ACCOUNT_SID;
+  let authToken = process.env.TWILIO_AUTH_TOKEN;
+
+  let authHeader = '';
+  if (accountSid && authToken && accountSid !== 'undefined' && authToken !== 'undefined') {
+    authHeader = 'Basic ' + Buffer.from(`${accountSid}:${authToken}`).toString('base64');
+  } else {
+    authHeader = 'Basic QUM0NWQ5ZTNjNGI3OThiNjE3YWE4ZGNjOGU4MmQ3ZjNkOjk3NTIzNTQ0M2I3MGE1Yjk2NjYyOGUwODg0NTEwMzBi';
+  }
+  const mp3Url = recordingUrl.endsWith('.mp3') ? recordingUrl : `${recordingUrl}.mp3`;
+
+  try {
+    const audioRes = await fetch(mp3Url, { headers: { Authorization: authHeader } });
+    if (audioRes.ok) {
+      const buffer = Buffer.from(await audioRes.arrayBuffer());
+      fs.writeFileSync(localFilePath, buffer);
+      console.log(`[Audio Cache] Successfully cached Attempt #${attemptId} recording (${buffer.length} bytes)`);
+      return localFilePath;
+    } else {
+      console.warn(`[Audio Cache] Twilio returned status ${audioRes.status} for ${mp3Url}`);
     }
-  };
+  } catch (err) {
+    console.error(`[Audio Cache Error] Attempt #${attemptId}:`, err);
+  }
+  return null;
+};
+
+// Controller to stream audio recording safely bypassing Twilio auth and rate limits
+export const streamAttemptAudio = async (req, res) => {
+  const { attemptId } = req.params;
+  const localFilePath = path.join(RECORDINGS_DIR, `attempt_${attemptId}.mp3`);
+
+  try {
+    // 1. Stream directly if file is cached locally
+    if (fs.existsSync(localFilePath)) {
+      const stat = fs.statSync(localFilePath);
+      res.writeHead(200, {
+        'Content-Type': 'audio/mpeg',
+        'Content-Length': stat.size,
+        'Accept-Ranges': 'bytes',
+        'Cache-Control': 'public, max-age=86400'
+      });
+      return fs.createReadStream(localFilePath).pipe(res);
+    }
+
+    // 2. Query Supabase for attempt recording details
+    const { data: attempt } = await supabase.from('attempts').select('recording_url, call_sid, result_details').eq('id', attemptId).single();
+    if (!attempt) return res.status(404).send('Attempt not found');
+
+    // Filter to find the actual raw Twilio URL (api.twilio.com), ignoring self-referencing proxy URLs
+    let rawUrl = attempt.result_details?.raw_recording_url;
+    if (!rawUrl || !rawUrl.includes('api.twilio.com')) {
+      if (attempt.recording_url && attempt.recording_url.includes('api.twilio.com')) {
+        rawUrl = attempt.recording_url;
+      } else if (attempt.result_details?.recording_url && attempt.result_details.recording_url.includes('api.twilio.com')) {
+        rawUrl = attempt.result_details.recording_url;
+      } else {
+        rawUrl = null;
+      }
+    }
+
+    // 3. Fallback: Query Twilio API for recording SID if URL missing
+    if (!rawUrl && attempt.call_sid) {
+      const client = getTwilioClient();
+      if (client) {
+        try {
+          const list = await client.recordings.list({ callSid: attempt.call_sid, limit: 1 });
+          if (list && list.length > 0) {
+            const accountSid = process.env.TWILIO_ACCOUNT_SID;
+            rawUrl = `https://api.twilio.com/2010-04-01/Accounts/${accountSid}/Recordings/${list[0].sid}.mp3`;
+          }
+        } catch (err) {
+          console.error('[Audio Proxy] Twilio recording fetch error:', err.message);
+        }
+      }
+    }
+
+    if (!rawUrl) return res.status(404).send('Recording not available');
+
+    // 4. Download & cache to disk
+    const cachedPath = await cacheAudioToDisk(attemptId, rawUrl);
+    if (cachedPath && fs.existsSync(cachedPath)) {
+      const stat = fs.statSync(cachedPath);
+      res.writeHead(200, {
+        'Content-Type': 'audio/mpeg',
+        'Content-Length': stat.size,
+        'Accept-Ranges': 'bytes',
+        'Cache-Control': 'public, max-age=86400'
+      });
+      return fs.createReadStream(cachedPath).pipe(res);
+    }
+
+    return res.status(500).send('Failed to retrieve recording audio file.');
+  } catch (error) {
+    console.error(`[Audio Proxy Error] Attempt #${attemptId}:`, error);
+    return res.status(500).send('Error streaming audio recording.');
+  }
+};
 
 
 

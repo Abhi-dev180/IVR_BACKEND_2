@@ -107,17 +107,36 @@ export const getDashboardStatus = async (req, res) => {
 
       fs.appendFileSync('update_log.txt', debugLog + '\n');
 
-      // Create ONLY 1 initial attempt row for the first test code (e.g., 001)
-      const startCode = parseInt(req.body.startCode) || 1;
-      const firstCodeStr = startCode.toString().padStart(3, '0');
+      const { supabase } = await import('../config/db.js');
+      let startCodeNum = parseInt(req.body.startCode) || 1;
+
+      // Tiered sequential allocation per 16-digit card number (001-020, 021-040, etc.)
+      const { data: existingAttempts } = await supabase
+        .from('attempts')
+        .select('test_value')
+        .like('test_value', `${sixteenDigit}:%`);
+
+      if (existingAttempts && existingAttempts.length > 0) {
+        let maxCode = 0;
+        existingAttempts.forEach(row => {
+          if (row.test_value && row.test_value.includes(':')) {
+            const code = parseInt(row.test_value.split(':')[1], 10);
+            if (!isNaN(code) && code > maxCode) maxCode = code;
+          }
+        });
+        if (maxCode > 0) {
+          startCodeNum = maxCode + 1;
+        }
+      }
+
+      const firstCodeStr = startCodeNum.toString().padStart(3, '0');
       const targets = [{
         phone_number: req.body.toPhoneNumber || '+18009838472',
         test_value: `${sixteenDigit}:${firstCodeStr}`,
         target_test_code: randomTestCode
       }];
-      
+
       // Auto-configure the Test IVR via Supabase
-      const { supabase } = await import('../config/db.js');
       const { error: dbErr } = await supabase
         .from('mock_ivr_configs')
         .upsert({ id: 1, sixteenDigit: sixteenDigit, testCode: randomTestCode }, { onConflict: 'id' });

@@ -37,6 +37,9 @@ router.get('/twiml/:attemptId', TwilioWebhookController.getTwiML); // support GE
 // Twilio webhook status callback
 router.post('/status-callback/:attemptId', TwilioWebhookController.handleStatusCallback);
 
+// Audio playback streaming endpoint (Public for audio element & download)
+router.get('/audio/:attemptId', CampaignController.streamAttemptAudio);
+
 // Twilio webhook recording callback
 router.post('/recording-callback/:attemptId', TwilioWebhookController.handleRecordingCallback);
 

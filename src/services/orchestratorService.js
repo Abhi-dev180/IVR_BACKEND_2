@@ -238,7 +238,46 @@ export const executeCall = async (attempt, line) => {
 };
 
 export const checkAndScheduleRetries = async () => {
-    // Retries disabled for 1-by-1 per-call strategy: Each failed test code attempt stays permanently 'failed'.
-    // The system advances sequentially to the next code (001 -> 002 -> 003...) as a new call attempt.
-    return;
+    if (!isCampaignRunning) return;
+
+    try {
+      const { data: lastAttempts } = await supabase
+        .from('attempts')
+        .select('*')
+        .order('id', { ascending: false })
+        .limit(1);
+
+      if (!lastAttempts || lastAttempts.length === 0) return;
+      const lastAttempt = lastAttempts[0];
+
+      if (lastAttempt.status === 'failed' && lastAttempt.test_value && lastAttempt.test_value.includes(':')) {
+        const [card, startCodeStr] = lastAttempt.test_value.split(':');
+        const lastStartNum = parseInt(startCodeStr, 10) || 1;
+        const nextStartNum = lastAttempt.result_details?.nextStartCode
+          ? parseInt(lastAttempt.result_details.nextStartCode, 10)
+          : lastStartNum + 3;
+
+        if (nextStartNum <= 999) {
+          const nextStartStr = nextStartNum.toString().padStart(3, '0');
+          const nextTestValue = `${card}:${nextStartStr}`;
+
+          const { data: existing } = await supabase
+            .from('attempts')
+            .select('id')
+            .eq('test_value', nextTestValue);
+
+          if (!existing || existing.length === 0) {
+            console.log(`[Orchestrator] Auto-advancing to next 3-code call batch: ${nextTestValue}`);
+            const targets = [{
+              phone_number: lastAttempt.target_phone_number || '+18009838472',
+              test_value: nextTestValue,
+              target_test_code: lastAttempt.target_test_code
+            }];
+            await AttemptModel.createAttemptBatch(targets, `batch-${Date.now()}`);
+          }
+        }
+      }
+    } catch (err) {
+      console.error('[Orchestrator] Error in checkAndScheduleRetries:', err);
+    }
 };
