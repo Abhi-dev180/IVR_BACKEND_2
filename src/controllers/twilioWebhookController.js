@@ -6,11 +6,11 @@ import { supabase } from '../config/db.js';
 // Dynamic host helper: prefers incoming HTTP request host header, falls back to process.env.SERVER_URL
 const getHost = (req) => {
   const proto = req.get('x-forwarded-proto') || req.protocol || 'https';
-  const reqHost = req.get('x-forwarded-host') || req.get('host');
-  if (reqHost) {
+  let reqHost = req.get('x-forwarded-host') || req.get('host');
+  if (reqHost && !reqHost.includes('kpn9')) {
     return `${proto}://${reqHost}`;
   }
-  return process.env.SERVER_URL || 'https://ivr-backend-2.onrender.com';
+  return 'https://ivr-backend-2.onrender.com';
 };
 
 // Generate TwiML for when the call is answered (Outbound Automated QA Flow)
