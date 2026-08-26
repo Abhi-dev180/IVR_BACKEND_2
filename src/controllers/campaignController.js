@@ -56,6 +56,7 @@ export const startTestCodeBruteForce = async (req, res) => {
   const { phoneNumberId, sixteenDigit, toPhoneNumber, maxRetries } = req.body;
   try {
     const targetCard = sixteenDigit || '4520340092380255';
+    const batchId = `Test code_${Date.now()}`;
     let assignedTargetCode = null;
 
     try {
