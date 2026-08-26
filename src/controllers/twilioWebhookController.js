@@ -174,11 +174,18 @@ const isOneTimePasscodePrompt = (speech) => {
     lower.includes('1 time passcode') ||
     lower.includes('one time passcode') ||
     lower.includes('easyweb profile') ||
+    lower.includes('easyweb') ||
     lower.includes('confirm your identity') ||
     lower.includes('skip 1 time passcode') ||
+    lower.includes('skip one time passcode') ||
     lower.includes('passcode via text') ||
     lower.includes('passcode via phone') ||
-    lower.includes('messaging rates may apply')
+    lower.includes('messaging rates may apply') ||
+    lower.includes('messaging rates') ||
+    lower.includes('do not share this code') ||
+    lower.includes('press 1 via phone') ||
+    lower.includes('press 2') ||
+    lower.includes('passcode')
   );
 };
 

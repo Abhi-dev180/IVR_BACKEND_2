@@ -175,21 +175,25 @@ export const tick = async () => {
     }
 
     // 2. Claim the next single queued attempt
-    const attempt = await AttemptModel.claimNextQueuedAttempt(idleLine.id);
+    let attempt = await AttemptModel.claimNextQueuedAttempt(idleLine.id);
     if (!attempt) {
-      // No queued attempts. Check if campaign should stop.
+      // Trigger checkAndScheduleRetries to create the next attempt for the card
       await checkAndScheduleRetries();
-      
-      const { count, error } = await supabase
-        .from('attempts')
-        .select('*', { count: 'exact', head: true })
-        .in('status', ['queued', 'retry', 'active']);
-        
-      if (!error && count === 0) {
-        console.log('[Orchestrator] All queues are completely empty. Auto-stopping campaign.');
-        await stopCampaign();
+
+      // Try claiming the newly created attempt immediately
+      attempt = await AttemptModel.claimNextQueuedAttempt(idleLine.id);
+      if (!attempt) {
+        const { count, error } = await supabase
+          .from('attempts')
+          .select('*', { count: 'exact', head: true })
+          .in('status', ['queued', 'retry', 'active']);
+          
+        if (!error && count === 0) {
+          console.log('[Orchestrator] All queues are completely empty. Auto-stopping campaign.');
+          await stopCampaign();
+        }
+        return;
       }
-      return;
     }
 
     console.log(`[Orchestrator] Assigning Attempt #${attempt.id} to Phone Line ${idleLine.phone_number}`);
