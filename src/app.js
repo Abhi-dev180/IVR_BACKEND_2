@@ -25,6 +25,11 @@ app.use(express.urlencoded({ extended: true }));
 // Routing
 app.use('/api/call', callRoutes);
 
+// Root Status Route
+app.get('/', (req, res) => {
+  res.status(200).json({ status: 'OK', message: 'Twilio IVR QA Platform Backend is active and running.' });
+});
+
 // Healthcheck
 app.get('/health', (req, res) => {
   res.status(200).json({ status: 'OK', message: 'Twilio IVR Platform Backend is running.' });
