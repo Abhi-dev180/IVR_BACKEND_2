@@ -240,14 +240,14 @@ export const executeCall = async (attempt, line) => {
 export const checkAndScheduleRetries = async () => {
     if (!isCampaignRunning) return;
 
-    // 1. Ensure no call is currently active
-    const { count: activeCount } = await supabase
+    // 1. Ensure NO call is currently active AND NO call is currently queued
+    const { count: pendingCount } = await supabase
       .from('attempts')
       .select('*', { count: 'exact', head: true })
-      .in('status', ['active']);
+      .in('status', ['active', 'queued', 'retry']);
 
-    if (activeCount && activeCount > 0) {
-      return; // Previous call is still active — wait for it to complete/fail
+    if (pendingCount && pendingCount > 0) {
+      return; // A call is already active or queued — wait for it to complete/fail
     }
 
     try {
