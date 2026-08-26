@@ -390,7 +390,8 @@ export const handleListenCard = async (req, res) => {
       return res.send(twiml.toString());
     }
 
-      // ✅ IVR asked for test code — send test code DTMF instantly!
+    // Check if IVR is asking for the test code / PIN
+    if (isAskingForCodePrompt(SpeechResult)) {
       const startCodeNum = parseInt(testCode, 10) || 1;
       const startCodeStr = startCodeNum.toString().padStart(3, '0');
 
