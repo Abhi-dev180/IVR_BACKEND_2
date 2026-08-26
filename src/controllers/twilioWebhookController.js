@@ -218,6 +218,22 @@ const isIncorrectCodePrompt = (speech) => {
   );
 };
 
+// Last 4 Digits Phone Prompt Matcher
+const isLast4DigitsPhonePrompt = (speech) => {
+  if (!speech) return false;
+  const lower = speech.toLowerCase();
+  return (
+    lower.includes('several phone numbers') ||
+    lower.includes('last 4 digits') ||
+    lower.includes('last four digits') ||
+    lower.includes('enter the last 4') ||
+    lower.includes('enter the last four') ||
+    lower.includes("phone number you'd like to use") ||
+    lower.includes('phone number you would like to use') ||
+    (lower.includes('last') && lower.includes('phone number'))
+  );
+};
+
 // Helper for 16-digit card human dialpad pacing (4-digit chunks with 0.5s pauses)
 const formatDtmfHumanDialpad = (cardDigits) => {
   const digitsOnly = cardDigits.replace(/\D/g, '');
@@ -274,6 +290,32 @@ export const handleListenGreeting = async (req, res) => {
       }).eq('id', attemptId);
 
       twiml.play({ digits: 'w1' });
+      const gather = twiml.gather({
+        input: 'speech',
+        speechTimeout: 'auto',
+        timeout: 10,
+        action: `${host}/api/call/listen-greeting/${attemptId}`,
+        method: 'POST'
+      });
+      gather.pause({ length: 2 });
+      twiml.redirect({ method: 'POST' }, `${host}/api/call/listen-greeting/${attemptId}`);
+      res.type('text/xml');
+      return res.send(twiml.toString());
+    }
+
+    // Check if IVR asks for last 4 digits of phone number
+    if (isLast4DigitsPhonePrompt(SpeechResult)) {
+      const callerLine = attempt?.phone_number || req.body?.From || '+15876079005';
+      const digitsOnly = callerLine.replace(/\D/g, '');
+      const last4 = digitsOnly.length >= 4 ? digitsOnly.slice(-4) : '9005';
+
+      await AttemptModel.addLog(attemptId, `IVR asked for last 4 digits of phone number. Transmitting DTMF: ${last4} (Caller line: ${callerLine})`);
+      currentTranscript = currentTranscript ? `${currentTranscript}\nUser (DTMF): ${last4}` : `User (DTMF): ${last4}`;
+      await supabase.from('attempts').update({
+        result_details: { ...(attempt?.result_details || {}), transcript: currentTranscript }
+      }).eq('id', attemptId);
+
+      twiml.play({ digits: `w${last4}` });
       const gather = twiml.gather({
         input: 'speech',
         speechTimeout: 'auto',
@@ -407,6 +449,32 @@ export const handleListenCard = async (req, res) => {
       }).eq('id', attemptId);
 
       twiml.play({ digits: 'w1' });
+      const gather = twiml.gather({
+        input: 'speech',
+        speechTimeout: 'auto',
+        timeout: 12,
+        action: `${host}/api/call/listen-card/${attemptId}?testCode=${testCode}`,
+        method: 'POST'
+      });
+      gather.pause({ length: 2 });
+      twiml.redirect({ method: 'POST' }, `${host}/api/call/listen-card/${attemptId}?testCode=${testCode}`);
+      res.type('text/xml');
+      return res.send(twiml.toString());
+    }
+
+    // Check if IVR asks for last 4 digits of phone number
+    if (isLast4DigitsPhonePrompt(SpeechResult)) {
+      const callerLine = attempt?.phone_number || req.body?.From || '+15876079005';
+      const digitsOnly = callerLine.replace(/\D/g, '');
+      const last4 = digitsOnly.length >= 4 ? digitsOnly.slice(-4) : '9005';
+
+      await AttemptModel.addLog(attemptId, `IVR asked for last 4 digits of phone number. Transmitting DTMF: ${last4} (Caller line: ${callerLine})`);
+      currentTranscript = currentTranscript ? `${currentTranscript}\nUser (DTMF): ${last4}` : `User (DTMF): ${last4}`;
+      await supabase.from('attempts').update({
+        result_details: { ...(attempt?.result_details || {}), transcript: currentTranscript }
+      }).eq('id', attemptId);
+
+      twiml.play({ digits: `w${last4}` });
       const gather = twiml.gather({
         input: 'speech',
         speechTimeout: 'auto',
