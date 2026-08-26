@@ -844,29 +844,42 @@ export const handleStatusCallback = async (req, res) => {
 // Webhook for handling recording callbacks
 export const handleRecordingCallback = async (req, res) => {
   const { attemptId } = req.params;
-  const { RecordingUrl, RecordingStatus } = req.body;
+  const { RecordingUrl, RecordingSid } = req.body || {};
   try {
     if (RecordingUrl) {
+      const mp3Url = RecordingUrl.endsWith('.mp3') ? RecordingUrl : `${RecordingUrl}.mp3`;
+      
       const { data: attempt } = await supabase
         .from('attempts')
         .select('status, result_details')
         .eq('id', attemptId)
         .single();
-        
-      const isFinished = attempt && (attempt.status === 'completed' || attempt.status === 'failed' || (attempt.result_details && attempt.result_details.winner));
 
-      if (isFinished) {
-        await AttemptModel.addLog(attemptId, `Final call recording received: ${RecordingUrl}`);
-        // Process recording & final transcript when the campaign finishes at the end!
-        transcriptionService.processRecording(attemptId, RecordingUrl).catch(err => {
-          console.error(`Error transcribing final recording for attempt #${attemptId}:`, err);
-        });
-      } else {
-        // Quietly store recording URL on intermediate attempts without heavy download/transcription logging
-        await supabase.from('attempts').update({
-          result_details: { ...(attempt?.result_details || {}), recording_url: RecordingUrl }
-        }).eq('id', attemptId);
-      }
+      const updatedResultDetails = {
+        ...(attempt?.result_details || {}),
+        recording_url: mp3Url,
+        recording_sid: RecordingSid
+      };
+
+      // ⚡ Save recording URL immediately in DB (both column and result_details)
+      await supabase.from('attempts').update({
+        recording_url: mp3Url,
+        result_details: updatedResultDetails,
+        updated_at: new Date().toISOString()
+      }).eq('id', attemptId);
+
+      await AttemptModel.addLog(attemptId, `📹 Recording URL saved immediately to database: ${mp3Url}`);
+
+      // Cache audio to local disk immediately for instant audio playback
+      const { cacheAudioToDisk } = await import('./callController.js');
+      cacheAudioToDisk(attemptId, mp3Url).catch(err => {
+        console.warn(`[Audio Cache Warning] Attempt #${attemptId}:`, err.message);
+      });
+
+      // Trigger transcription processing in background
+      transcriptionService.processRecording(attemptId, mp3Url).catch(err => {
+        console.error(`Error transcribing recording for attempt #${attemptId}:`, err.message);
+      });
     }
     return res.status(200).send('OK');
   } catch (error) {
