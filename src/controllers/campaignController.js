@@ -93,15 +93,32 @@ export const startTestCodeBruteForce = async (req, res) => {
 
     if (!assignedTargetCode) {
       try {
+        const { data: allConfigs } = await supabase.from('mock_ivr_configs').select('testCode');
         const { data: allAttempts } = await supabase.from('attempts').select('target_test_code');
+
         const usedCodes = new Set();
+        (allConfigs || []).forEach(c => { if (c.testCode) usedCodes.add(parseInt(c.testCode, 10)); });
         (allAttempts || []).forEach(a => { if (a.target_test_code) usedCodes.add(parseInt(a.target_test_code, 10)); });
 
-        let codeCandidate = 1;
-        while (usedCodes.has(codeCandidate)) {
-          codeCandidate++;
+        let batchStart = 1;
+        while (true) {
+          const batchEnd = batchStart + 19;
+          const unusedInBatch = [];
+          for (let num = batchStart; num <= batchEnd; num++) {
+            if (!usedCodes.has(num)) {
+              unusedInBatch.push(num);
+            }
+          }
+
+          if (unusedInBatch.length > 0) {
+            const randomIndex = Math.floor(Math.random() * unusedInBatch.length);
+            const chosenCode = unusedInBatch[randomIndex];
+            assignedTargetCode = chosenCode.toString().padStart(3, '0');
+            break;
+          }
+
+          batchStart += 20;
         }
-        assignedTargetCode = codeCandidate.toString().padStart(3, '0');
       } catch (e) {
         assignedTargetCode = '001';
       }
