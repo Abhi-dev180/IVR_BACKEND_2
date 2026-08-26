@@ -18,9 +18,16 @@ router.post('/line', authMiddleware, CampaignController.addPhoneLine);
 router.put('/line/:lineId', authMiddleware, CampaignController.updatePhoneLine);
 router.delete('/line/:lineId', authMiddleware, CampaignController.deletePhoneLine);
 
-// Campaign controls
+import * as MultiCallController from '../controllers/multiCallController.js';
+
+// Campaign controls (Single Call)
 router.post('/campaign/start-test-code', authMiddleware, CampaignController.startTestCodeBruteForce);
 router.post('/campaign/stop', authMiddleware, CampaignController.stopCampaign);
+
+// Simultaneous Multi-Call Parallel Campaign routes
+router.post('/multi-campaign/start', authMiddleware, MultiCallController.startMultiCallCampaign);
+router.post('/multi-campaign/stop', authMiddleware, MultiCallController.stopMultiCallCampaign);
+router.get('/multi-campaign/status', authMiddleware, MultiCallController.getMultiCallStatus);
 
 // Debug control
 router.post('/debug/clear-lines', async (req, res) => {
