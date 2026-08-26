@@ -3,13 +3,10 @@ import * as PhoneLineModel from '../models/phoneLineModel.js';
 
 // Start Simultaneous Multi-Call Parallel Campaign
 export const startMultiCallCampaign = async (req, res) => {
-  const { lineIds, sixteenDigits, toPhoneNumber, maxRetries } = req.body;
+  const { callConfigs, lineIds, sixteenDigits, toPhoneNumber, maxRetries } = req.body;
   try {
-    if (!lineIds || !Array.isArray(lineIds) || lineIds.length === 0) {
-      return res.status(400).json({ error: 'Please select at least one outgoing phone line.' });
-    }
-
     const result = await MultiCallOrchestratorService.startMultiCallCampaign({
+      callConfigs,
       lineIds,
       sixteenDigits,
       toPhoneNumber: toPhoneNumber || '+18009838472',
@@ -17,7 +14,7 @@ export const startMultiCallCampaign = async (req, res) => {
     });
 
     return res.status(200).json({
-      message: `Simultaneous Multi-Call Campaign started across ${result.activeCallsCount} phone lines.`,
+      message: `Simultaneous Multi-Call Campaign started with ${result.activeCallsCount} parallel call forms.`,
       batchId: result.batchId,
       activeCallsCount: result.activeCallsCount
     });

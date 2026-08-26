@@ -109,42 +109,52 @@ const getOrAssignTargetCode = async (sixteenDigit) => {
 };
 
 // Start Simultaneous Multi-Call Parallel Campaign
-export const startMultiCallCampaign = async ({ lineIds, sixteenDigits, toPhoneNumber, maxRetriesVal = 3 }) => {
+export const startMultiCallCampaign = async ({ callConfigs, lineIds, sixteenDigits, toPhoneNumber, maxRetriesVal = 3 }) => {
   if (isMultiCallRunning) {
     throw new Error('A multi-call campaign is already running.');
   }
 
-  if (!lineIds || !Array.isArray(lineIds) || lineIds.length === 0) {
-    throw new Error('Please select at least one outgoing phone line.');
+  let finalConfigs = [];
+  if (callConfigs && Array.isArray(callConfigs) && callConfigs.length > 0) {
+    finalConfigs = callConfigs;
+  } else if (lineIds && Array.isArray(lineIds) && lineIds.length > 0) {
+    const cards = Array.isArray(sixteenDigits) ? sixteenDigits : (sixteenDigits ? sixteenDigits.split(',').map(s => s.trim()).filter(Boolean) : ['4520340092380255']);
+    const targetPhone = toPhoneNumber || '+18009838472';
+    finalConfigs = lineIds.map((id, index) => ({
+      lineId: parseInt(id, 10),
+      sixteenDigit: cards[index % cards.length],
+      toPhoneNumber: targetPhone
+    }));
   }
 
-  const cards = Array.isArray(sixteenDigits) ? sixteenDigits : (sixteenDigits ? sixteenDigits.split(',').map(s => s.trim()).filter(Boolean) : ['4520340092380255']);
-  const targetPhone = toPhoneNumber || '+18009838472';
-  
+  if (finalConfigs.length === 0) {
+    throw new Error('Please configure at least one call form.');
+  }
+
   isMultiCallRunning = true;
-  activeLineIds = lineIds.map(id => parseInt(id, 10));
+  activeLineIds = finalConfigs.map(c => parseInt(c.lineId, 10)).filter(Boolean);
   maxRetries = maxRetriesVal;
 
-  broadcast('multi_call_status', { running: true, lineCount: activeLineIds.length });
-  console.log(`[MultiCallOrchestrator] Starting Simultaneous Multi-Call Campaign across ${activeLineIds.length} phone lines.`);
+  broadcast('multi_call_status', { running: true, lineCount: finalConfigs.length });
+  console.log(`[MultiCallOrchestrator] Starting Simultaneous Multi-Call Campaign with ${finalConfigs.length} dynamic call forms.`);
 
   const batchId = `MultiCall_${Date.now()}`;
-  const lines = await PhoneLineModel.getAllPhoneLines();
-  const selectedLines = lines.filter(l => activeLineIds.includes(l.id));
+  const allLines = await PhoneLineModel.getAllPhoneLines();
 
-  if (selectedLines.length === 0) {
-    isMultiCallRunning = false;
-    activeLineIds = [];
-    throw new Error('None of the selected phone lines were found.');
-  }
-
-  // 🚀 SIMULTANEOUS PARALLEL EXECUTION: Dial all selected phone lines concurrently!
-  const callPromises = selectedLines.map(async (line, index) => {
+  // 🚀 SIMULTANEOUS PARALLEL EXECUTION: Dial all dynamic call forms concurrently!
+  const callPromises = finalConfigs.map(async (cfg, index) => {
     try {
-      const cardNum = cards[index % cards.length];
+      const line = allLines.find(l => l.id === parseInt(cfg.lineId, 10));
+      if (!line) {
+        console.warn(`[MultiCallOrchestrator] Phone line ID ${cfg.lineId} not found, skipping.`);
+        return;
+      }
+
+      const cardNum = cfg.sixteenDigit || '4520340092380255';
+      const targetPhone = cfg.toPhoneNumber || '+18009838472';
       const targetTestCode = await getOrAssignTargetCode(cardNum);
 
-      // Determine starting code number for this card
+      // Determine starting code number for this card (same logic as single test call!)
       let startCodeNum = 1;
       const { data: existingAttempts } = await supabase
         .from('attempts')
@@ -178,7 +188,7 @@ export const startMultiCallCampaign = async ({ lineIds, sixteenDigits, toPhoneNu
           test_value: `${cardNum}:${firstCodeStr}`,
           target_test_code: targetTestCode,
           status: 'active',
-          logs: [`[${new Date().toISOString()}] Simultaneous multi-call initiated on line ${line.phone_number}.`]
+          logs: [`[${new Date().toISOString()}] Simultaneous multi-call #${index + 1} initiated on line ${line.phone_number}.`]
         }])
         .select()
         .single();
@@ -196,13 +206,13 @@ export const startMultiCallCampaign = async ({ lineIds, sixteenDigits, toPhoneNu
       // Execute Twilio call concurrently
       await executeMultiCall(attempt, line);
     } catch (err) {
-      console.error(`[MultiCallOrchestrator] Error initiating call on line ${line.phone_number}:`, err.message);
+      console.error(`[MultiCallOrchestrator] Error initiating call config #${index + 1}:`, err.message);
     }
   });
 
   // Launch all Twilio calls simultaneously in parallel!
   await Promise.all(callPromises);
-  return { batchId, activeCallsCount: selectedLines.length };
+  return { batchId, activeCallsCount: finalConfigs.length };
 };
 
 // Execute single Twilio call within multi-call parallel campaign
