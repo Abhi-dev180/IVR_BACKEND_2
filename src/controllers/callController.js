@@ -164,11 +164,16 @@ export const getDashboardStatus = async (req, res) => {
     }
   };
 
-  // Stop campaign
   export const stopCampaign = async (req, res) => {
     try {
       OrchestratorService.stopCampaign();
       return res.status(200).json({ message: 'Campaign stopped successfully.' });
+    } catch (error) {
+      console.error('Error stopping campaign:', error);
+      return res.status(500).json({ error: error.message });
+    }
+  };
+
 // Local recordings directory setup
 const RECORDINGS_DIR = path.resolve(process.cwd(), 'recordings');
 if (!fs.existsSync(RECORDINGS_DIR)) {
