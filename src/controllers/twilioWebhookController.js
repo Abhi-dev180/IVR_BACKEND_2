@@ -160,9 +160,15 @@ const isDOBPrompt = (speech) => {
     lower.includes('date of birth') ||
     lower.includes("holder's date of birth") ||
     lower.includes('contains a month and a year') ||
-    lower.includes('enter or say the 2 digit number') ||
+    lower.includes('enter or say the 2 digit') ||
+    lower.includes('enter or say the 2-digit') ||
     lower.includes('2 digit number') ||
-    lower.includes('primary account')
+    lower.includes('2-digit number') ||
+    lower.includes('representing the month') ||
+    lower.includes('representing the year') ||
+    lower.includes('digits representing the year') ||
+    lower.includes('primary account') ||
+    lower.includes('before making your selection')
   );
 };
 
