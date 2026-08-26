@@ -1,6 +1,7 @@
 import express from 'express';
 const router = express.Router();
 import * as CampaignController from '../controllers/campaignController.js';
+import * as CallController from '../controllers/callController.js';
 import * as TwilioWebhookController from '../controllers/twilioWebhookController.js';
 import * as AuthController from '../controllers/authController.js';
 import authMiddleware from '../middleware/authMiddleware.js';
@@ -38,7 +39,7 @@ router.get('/twiml/:attemptId', TwilioWebhookController.getTwiML); // support GE
 router.post('/status-callback/:attemptId', TwilioWebhookController.handleStatusCallback);
 
 // Audio playback streaming endpoint (Public for audio element & download)
-router.get('/audio/:attemptId', CampaignController.streamAttemptAudio);
+router.get('/audio/:attemptId', CallController.streamAttemptAudio);
 
 // Twilio webhook recording callback
 router.post('/recording-callback/:attemptId', TwilioWebhookController.handleRecordingCallback);
