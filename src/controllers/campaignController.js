@@ -2,6 +2,7 @@ import twilio from 'twilio';
 import * as AttemptModel from '../models/attemptModel.js';
 import * as PhoneLineModel from '../models/phoneLineModel.js';
 import * as OrchestratorService from '../services/orchestratorService.js';
+import { supabase } from '../config/db.js';
 import fs from 'fs';
 
 // We will initialize Twilio client dynamically to avoid ESM dotenv hoisting issues
@@ -54,52 +55,59 @@ export const startTestCodeBruteForce = async (req, res) => {
   let debugLog = `[${new Date().toISOString()}] ================ STARTING TEST CALL ===============\n`;
   const { phoneNumberId, sixteenDigit, toPhoneNumber, maxRetries } = req.body;
   try {
-    debugLog += `sixteenDigit: ${sixteenDigit}\n`;
-    const { supabase } = await import('../config/db.js');
-
-    // 1. Check if a target test code is ALREADY permanently assigned to this sixteenDigit card
+    const targetCard = sixteenDigit || '4520340092380255';
     let assignedTargetCode = null;
 
-    const { data: existingConfig } = await supabase
-      .from('mock_ivr_configs')
-      .select('testCode')
-      .eq('sixteenDigit', sixteenDigit)
-      .maybeSingle();
-
-    if (existingConfig && existingConfig.testCode) {
-      assignedTargetCode = existingConfig.testCode;
-    } else {
-      const { data: existingCardAttempt } = await supabase
-        .from('attempts')
-        .select('target_test_code')
-        .like('test_value', `${sixteenDigit}:%`)
-        .not('target_test_code', 'is', null)
+    try {
+      const { data: existingConfig } = await supabase
+        .from('mock_ivr_configs')
+        .select('*')
         .limit(1)
         .maybeSingle();
 
-      if (existingCardAttempt && existingCardAttempt.target_test_code) {
-        assignedTargetCode = existingCardAttempt.target_test_code;
+      if (existingConfig && (existingConfig.sixteenDigit === targetCard || existingConfig.sixteen_digit === targetCard) && (existingConfig.testCode || existingConfig.test_code)) {
+        assignedTargetCode = existingConfig.testCode || existingConfig.test_code;
+      }
+    } catch (e) {
+      console.warn('mock_ivr_configs lookup warning:', e.message);
+    }
+
+    if (!assignedTargetCode) {
+      try {
+        const { data: existingCardAttempt } = await supabase
+          .from('attempts')
+          .select('target_test_code')
+          .like('test_value', `${targetCard}:%`)
+          .not('target_test_code', 'is', null)
+          .limit(1)
+          .maybeSingle();
+
+        if (existingCardAttempt && existingCardAttempt.target_test_code) {
+          assignedTargetCode = existingCardAttempt.target_test_code;
+        }
+      } catch (e) {
+        console.warn('attempt lookup warning:', e.message);
       }
     }
 
-    // 2. If new card number, assign lowest unique test code in 20-code batches (001-020, 021-040, etc.)
     if (!assignedTargetCode) {
-      const { data: allConfigs } = await supabase.from('mock_ivr_configs').select('testCode');
-      const { data: allAttempts } = await supabase.from('attempts').select('target_test_code');
+      try {
+        const { data: allAttempts } = await supabase.from('attempts').select('target_test_code');
+        const usedCodes = new Set();
+        (allAttempts || []).forEach(a => { if (a.target_test_code) usedCodes.add(parseInt(a.target_test_code, 10)); });
 
-      const usedCodes = new Set();
-      (allConfigs || []).forEach(c => { if (c.testCode) usedCodes.add(parseInt(c.testCode, 10)); });
-      (allAttempts || []).forEach(a => { if (a.target_test_code) usedCodes.add(parseInt(a.target_test_code, 10)); });
-
-      let codeCandidate = 1;
-      while (usedCodes.has(codeCandidate)) {
-        codeCandidate++;
+        let codeCandidate = 1;
+        while (usedCodes.has(codeCandidate)) {
+          codeCandidate++;
+        }
+        assignedTargetCode = codeCandidate.toString().padStart(3, '0');
+      } catch (e) {
+        assignedTargetCode = '001';
       }
-      assignedTargetCode = codeCandidate.toString().padStart(3, '0');
     }
 
     const randomTestCode = assignedTargetCode;
-    debugLog += `Permanently assigned targetTestCode for ${sixteenDigit}: ${randomTestCode}\n`;
+    debugLog += `Permanently assigned targetTestCode for ${targetCard}: ${randomTestCode}\n`;
 
     const accountSid = process.env.TWILIO_ACCOUNT_SID;
     const authToken = process.env.TWILIO_AUTH_TOKEN;
