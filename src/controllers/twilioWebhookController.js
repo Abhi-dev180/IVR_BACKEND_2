@@ -249,7 +249,7 @@ export const handleListenGreeting = async (req, res) => {
 
     // 🛑 Check for Immediate Hangup Triggers (DOB / Passcode)
     if (isDOBPrompt(SpeechResult) || isOneTimePasscodePrompt(SpeechResult)) {
-      await AttemptModel.addLog(attemptId, `🛑 Target IVR requested Date of Birth / Passcode verification. Hanging up call immediately.`);
+      await AttemptModel.addLog(attemptId, `🛑 Target IVR requested Date of Birth / Passcode verification. Dropping call immediately and starting new call...`);
       await AttemptModel.updateAttemptStatus(attemptId, 'failed', 0, { error: 'IVR requested DOB or One-Time Passcode' });
       twiml.hangup();
       res.type('text/xml');
@@ -360,7 +360,7 @@ export const handleListenCard = async (req, res) => {
 
     // 🛑 Check for Immediate Hangup Triggers (DOB / Passcode)
     if (isDOBPrompt(SpeechResult) || isOneTimePasscodePrompt(SpeechResult)) {
-      await AttemptModel.addLog(attemptId, `🛑 Target IVR requested Date of Birth / Passcode verification. Hanging up call immediately.`);
+      await AttemptModel.addLog(attemptId, `🛑 Target IVR requested Date of Birth / Passcode verification. Dropping call immediately and starting new call...`);
       await AttemptModel.updateAttemptStatus(attemptId, 'failed', 0, { error: 'IVR requested DOB or One-Time Passcode' });
       twiml.hangup();
       res.type('text/xml');
