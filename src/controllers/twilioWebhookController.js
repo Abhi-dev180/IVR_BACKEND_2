@@ -390,8 +390,7 @@ export const handleListenCard = async (req, res) => {
       return res.send(twiml.toString());
     }
 
-    // Check if IVR is asking for the test code / PIN
-    if (isAskingForCodePrompt(SpeechResult)) {
+      // ✅ IVR asked for test code — send test code DTMF instantly!
       const startCodeNum = parseInt(testCode, 10) || 1;
       const startCodeStr = startCodeNum.toString().padStart(3, '0');
 
@@ -401,7 +400,13 @@ export const handleListenCard = async (req, res) => {
       let freshTranscript = freshAttempt?.result_details?.transcript || currentTranscript;
       freshTranscript = freshTranscript ? `${freshTranscript}\nUser (DTMF): ${startCodeStr}` : `User (DTMF): ${startCodeStr}`;
       await supabase.from('attempts').update({
-        result_details: { ...(freshAttempt?.result_details || attempt?.result_details || {}), transcript: freshTranscript }
+        result_details: {
+          ...(freshAttempt?.result_details || attempt?.result_details || {}),
+          transcript: freshTranscript,
+          codeTestedInCall: true,
+          highestCodeNumTested: startCodeNum,
+          lastCodeTransmitted: startCodeStr
+        }
       }).eq('id', attemptId);
 
       twiml.play({ digits: `w${startCodeStr}` });
@@ -506,7 +511,13 @@ export const handleListenCode = async (req, res) => {
         await AttemptModel.addLog(attemptId, `IVR reported incorrect code (${currentCodeStr}). Trying code [${nextOffset + 1}/3 in call] over DTMF: ${nextCodeStr}`);
         updatedTranscript = `${updatedTranscript}\nUser (DTMF): ${nextCodeStr}`;
         await supabase.from('attempts').update({
-          result_details: { ...(attempt?.result_details || {}), transcript: updatedTranscript }
+          result_details: {
+            ...(attempt?.result_details || {}),
+            transcript: updatedTranscript,
+            codeTestedInCall: true,
+            highestCodeNumTested: nextCodeNum,
+            lastCodeTransmitted: nextCodeStr
+          }
         }).eq('id', attemptId);
 
         twiml.play({ digits: `w${nextCodeStr}` });

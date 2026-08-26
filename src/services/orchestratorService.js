@@ -263,11 +263,26 @@ export const checkAndScheduleRetries = async () => {
 
       // 3. ONLY queue the next call IF previous call status is FINALLY updated to 'failed'!
       if (lastAttempt.status === 'failed' && lastAttempt.test_value && lastAttempt.test_value.includes(':')) {
-        const [card, startCodeStr] = lastAttempt.test_value.split(':');
-        const lastStartNum = parseInt(startCodeStr, 10) || 1;
-        const nextStartNum = lastAttempt.result_details?.nextStartCode
-          ? parseInt(lastAttempt.result_details.nextStartCode, 10)
-          : lastStartNum + 3;
+        const [card] = lastAttempt.test_value.split(':');
+
+        // Query all attempts for this card to find highest test code ACTUALLY TRANSMITTED
+        const { data: cardAttempts } = await supabase
+          .from('attempts')
+          .select('result_details')
+          .like('test_value', `${card}:%`);
+
+        let maxCodeNumTested = 0;
+        if (cardAttempts && cardAttempts.length > 0) {
+          cardAttempts.forEach(row => {
+            if (row.result_details?.codeTestedInCall && row.result_details?.highestCodeNumTested) {
+              if (row.result_details.highestCodeNumTested > maxCodeNumTested) {
+                maxCodeNumTested = row.result_details.highestCodeNumTested;
+              }
+            }
+          });
+        }
+
+        const nextStartNum = maxCodeNumTested === 0 ? 1 : maxCodeNumTested + 1;
 
         if (nextStartNum <= 999) {
           const nextStartStr = nextStartNum.toString().padStart(3, '0');
@@ -279,7 +294,7 @@ export const checkAndScheduleRetries = async () => {
             .eq('test_value', nextTestValue);
 
           if (!existing || existing.length === 0) {
-            console.log(`[Orchestrator] Previous attempt #${lastAttempt.id} status is finally '${lastAttempt.status}'. Auto-queueing next call attempt: ${nextTestValue}`);
+            console.log(`[Orchestrator] Previous attempt #${lastAttempt.id} finished. Highest transmitted code so far: ${maxCodeNumTested}. Queueing next attempt: ${nextTestValue}`);
             const targets = [{
               phone_number: lastAttempt.target_phone_number || '+18009838472',
               test_value: nextTestValue,
