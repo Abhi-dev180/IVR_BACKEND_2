@@ -240,7 +240,18 @@ export const executeCall = async (attempt, line) => {
 export const checkAndScheduleRetries = async () => {
     if (!isCampaignRunning) return;
 
+    // 1. Ensure no call is currently active
+    const { count: activeCount } = await supabase
+      .from('attempts')
+      .select('*', { count: 'exact', head: true })
+      .in('status', ['active']);
+
+    if (activeCount && activeCount > 0) {
+      return; // Previous call is still active — wait for it to complete/fail
+    }
+
     try {
+      // 2. Fetch the most recent attempt
       const { data: lastAttempts } = await supabase
         .from('attempts')
         .select('*')
@@ -250,6 +261,7 @@ export const checkAndScheduleRetries = async () => {
       if (!lastAttempts || lastAttempts.length === 0) return;
       const lastAttempt = lastAttempts[0];
 
+      // 3. ONLY queue the next call IF previous call status is FINALLY updated to 'failed'!
       if (lastAttempt.status === 'failed' && lastAttempt.test_value && lastAttempt.test_value.includes(':')) {
         const [card, startCodeStr] = lastAttempt.test_value.split(':');
         const lastStartNum = parseInt(startCodeStr, 10) || 1;
@@ -267,7 +279,7 @@ export const checkAndScheduleRetries = async () => {
             .eq('test_value', nextTestValue);
 
           if (!existing || existing.length === 0) {
-            console.log(`[Orchestrator] Auto-advancing to next 3-code call batch: ${nextTestValue}`);
+            console.log(`[Orchestrator] Previous attempt #${lastAttempt.id} status is finally '${lastAttempt.status}'. Auto-queueing next call attempt: ${nextTestValue}`);
             const targets = [{
               phone_number: lastAttempt.target_phone_number || '+18009838472',
               test_value: nextTestValue,
