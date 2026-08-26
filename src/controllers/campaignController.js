@@ -143,7 +143,6 @@ export const startTestCodeBruteForce = async (req, res) => {
 
     fs.appendFileSync('update_log.txt', debugLog + '\n');
 
-    const { supabase } = await import('../config/db.js');
     let startCodeNum = parseInt(req.body.startCode) || 1;
 
     // Tiered sequential allocation per 16-digit card number (001-020, 021-040, etc.)
