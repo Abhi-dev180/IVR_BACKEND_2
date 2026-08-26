@@ -233,7 +233,7 @@ export const executeMultiCall = async (attempt, line) => {
 
   const callerLineNumber = line.phone_number;
   const testCode = attempt.test_value ? attempt.test_value.split(':')[1] : '001';
-  const url = `${host}/api/call/voice/${attempt.id}?testCode=${testCode}`;
+  const url = `${host}/api/call/twiml/${attempt.id}?testCode=${testCode}`;
   const statusCallback = `${host}/api/call/status-callback/${attempt.id}`;
   const recordingCallback = `${host}/api/call/recording-callback/${attempt.id}`;
 
